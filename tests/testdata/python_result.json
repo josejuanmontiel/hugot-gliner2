@@ -1,0 +1,30 @@
+{
+  "Persona": [
+    "Elena Rodríguez",
+    "Lukas Virtanen",
+    "Sarah Jenkins",
+    "jefa Sofía Al-Mansoori",
+    "Garrigues"
+  ],
+  "Organización": [
+    "Nordic AI",
+    "Banco Santander",
+    "TechNova Solutions",
+    "I+D"
+  ],
+  "Lugar": [
+    "Madrid",
+    "Barcelona",
+    "Helsinki"
+  ],
+  "Cantidad": [
+    "45 millones de euros"
+  ],
+  "Fecha": [
+    "junio",
+    "finales de año"
+  ],
+  "Tecnología": [
+    "IA generativa"
+  ]
+}

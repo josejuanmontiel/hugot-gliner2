@@ -1,0 +1,25 @@
+# Entornos virtuales
+venv/
+.env
+
+# Pesos de modelos y grandes binarios
+*.safetensors
+*.onnx
+*.onnx.data
+*.bin
+*.pt
+
+# Compilados de Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/hugot-gliner2
+
+# Metadatos del IDE y OS
+.idea/
+.vscode/
+.DS_Store
