@@ -12,12 +12,10 @@ import (
 func main() {
 	fmt.Println("🚀 Initializing GLiNER2 Pipeline Demo (E2E Text-to-Relations)...")
 
-	// 1. Initialize ONNX runtime environment
-	// IMPORTANT: Update this path to match your local onnxruntime installation!
-	onnxruntime_go.SetSharedLibraryPath("/home/jose/openvino/openvino/lib/python3.13/site-packages/onnxruntime/capi/libonnxruntime.so.1.25.1")
-	err := onnxruntime_go.InitializeEnvironment()
+	// 1. Initialize ONNX runtime environment robustly
+	err := gliner.SetupONNX()
 	if err != nil {
-		log.Fatalf("Failed to initialize ONNX environment: %v\nMake sure the shared library path is correct.", err)
+		log.Fatalf("Failed to initialize ONNX environment: %v", err)
 	}
 	defer onnxruntime_go.DestroyEnvironment()
 
