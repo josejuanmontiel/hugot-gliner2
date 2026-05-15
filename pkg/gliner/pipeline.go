@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"hugot-gliner2/pkg/layers"
 	"hugot-gliner2/pkg/math"
+	"hugot-gliner2/pkg/types"
 
 	"github.com/daulet/tokenizers"
 	"github.com/yalue/onnxruntime_go"
@@ -18,345 +18,225 @@ type Pipeline struct {
 	countSession   *onnxruntime_go.DynamicAdvancedSession
 
 	// Modular Classification Heads
-	SpanProjectStart layers.Module
-	SpanProjectEnd   layers.Module
-	SpanOutProject   layers.Module
-	EntityClassifier layers.Module
+	Heads *Heads
 
-	labels       []string // The entity/relation labels
+	labels       []string
 	tk           *tokenizers.Tokenizer
 	promptIDs    []int64
 	promptLabels []string
 }
 
-// getTensor is a helper to safely extract a tensor by name.
-func getTensor(tensors map[string]*math.Tensor, name string) (*math.Tensor, error) {
-	t, ok := tensors[name]
-	if !ok {
-		return nil, fmt.Errorf("missing tensor: %s", name)
-	}
-	return t, nil
+// NewPipeline creates a pipeline using the standard GLiNER2 architecture.
+func NewPipeline(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, labels []string) (*Pipeline, error) {
+	return NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath, labels, &GLiNER2Architecture{})
 }
 
-// NewPipeline initializes a new GLiNER pipeline.
-func NewPipeline(encoderPath, countEmbedPath, safetensorsPath, tokenizerPath, promptIDsPath string, labels []string) (*Pipeline, error) {
-	// Load tokenizer
+// NewPipelineWithArch creates a pipeline using a specific head architecture strategy.
+func NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, labels []string, arch HeadArchitecture) (*Pipeline, error) {
 	tk, err := tokenizers.FromFile(tokenizerPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer: %w", err)
 	}
 
-	// Load prompt ids
-	b, err := os.ReadFile(promptIDsPath)
+	encoderSession, err := onnxruntime_go.NewDynamicAdvancedSession(encoderPath,
+		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, nil)
 	if err != nil {
 		tk.Close()
-		return nil, fmt.Errorf("failed to load prompt ids: %w", err)
+		return nil, fmt.Errorf("failed to create encoder session: %w", err)
 	}
-	var promptData struct {
-		PromptIDs []int64  `json:"prompt_ids"`
-		Labels    []string `json:"labels"`
-	}
-	if err := json.Unmarshal(b, &promptData); err != nil {
+
+	countSession, err := onnxruntime_go.NewDynamicAdvancedSession(countPath,
+		[]string{"pc_emb"}, []string{"struct_proj"}, nil)
+	if err != nil {
 		tk.Close()
-		return nil, fmt.Errorf("failed to parse prompt ids: %w", err)
-	}
-
-	// Configure dynamic session options
-	sessionOptions, err := onnxruntime_go.NewSessionOptions()
-	if err != nil {
-		return nil, fmt.Errorf("error creating session options: %w", err)
-	}
-	defer sessionOptions.Destroy()
-
-	encoderSession, err := onnxruntime_go.NewDynamicAdvancedSession(
-		encoderPath,
-		[]string{"input_ids", "attention_mask"},
-		[]string{"last_hidden_state"},
-		sessionOptions,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("error creating encoder session: %w", err)
-	}
-
-	countSession, err := onnxruntime_go.NewDynamicAdvancedSession(
-		countEmbedPath,
-		[]string{"pc_emb"},
-		[]string{"struct_proj"},
-		sessionOptions,
-	)
-	if err != nil {
 		encoderSession.Destroy()
-		return nil, fmt.Errorf("error creating count_embed session: %w", err)
+		return nil, fmt.Errorf("failed to create count session: %w", err)
 	}
 
-	// 2. Read safetensors and populate ModelWeights.
+	promptData, err := LoadPromptData(promptPath)
+	if err != nil {
+		tk.Close()
+		encoderSession.Destroy()
+		countSession.Destroy()
+		return nil, fmt.Errorf("failed to load prompt data: %w", err)
+	}
+
 	rawTensors, err := LoadSafetensors(safetensorsPath)
 	if err != nil {
+		tk.Close()
 		encoderSession.Destroy()
 		countSession.Destroy()
 		return nil, fmt.Errorf("failed to load safetensors: %w", err)
 	}
 
-	// Define our modular heads using the layers package
+	heads, err := arch.Assemble(rawTensors)
+	if err != nil {
+		tk.Close()
+		encoderSession.Destroy()
+		countSession.Destroy()
+		return nil, fmt.Errorf("failed to assemble heads: %w", err)
+	}
+
 	p := &Pipeline{
 		encoderSession: encoderSession,
 		countSession:   countSession,
+		Heads:          heads,
 		labels:         promptData.Labels,
 		tk:             tk,
 		promptIDs:      promptData.PromptIDs,
 		promptLabels:   promptData.Labels,
 	}
 
-	// Span Project Start: Linear(0) -> ReLU -> Linear(3)
-	p.SpanProjectStart = &layers.SequentialModule{
-		Modules: []layers.Module{
-			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_start.0.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_start.0.bias"]},
-			&layers.ActivationLayer{Fn: math.ReLU},
-			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_start.3.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_start.3.bias"]},
-		},
-	}
-
-	// Span Project End: Linear(0) -> ReLU -> Linear(3)
-	p.SpanProjectEnd = &layers.SequentialModule{
-		Modules: []layers.Module{
-			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_end.0.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_end.0.bias"]},
-			&layers.ActivationLayer{Fn: math.ReLU},
-			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_end.3.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_end.3.bias"]},
-		},
-	}
-
-	// Span Out Project: Linear(0) -> ReLU -> Linear(3)
-	p.SpanOutProject = &layers.SequentialModule{
-		Modules: []layers.Module{
-			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.out_project.0.weight"], Bias: rawTensors["span_rep.span_rep_layer.out_project.0.bias"]},
-			&layers.ActivationLayer{Fn: math.ReLU},
-			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.out_project.3.weight"], Bias: rawTensors["span_rep.span_rep_layer.out_project.3.bias"]},
-		},
-	}
-
-	// Entity Classifier: Linear(0) -> ReLU -> Linear(2) -> Sigmoid
-	p.EntityClassifier = &layers.SequentialModule{
-		Modules: []layers.Module{
-			&layers.LinearLayer{Weight: rawTensors["classifier.0.weight"], Bias: rawTensors["classifier.0.bias"]},
-			&layers.ActivationLayer{Fn: math.ReLU},
-			&layers.LinearLayer{Weight: rawTensors["classifier.2.weight"], Bias: rawTensors["classifier.2.bias"]},
-			&layers.ActivationLayer{Fn: math.Sigmoid},
-		},
-	}
-
 	return p, nil
 }
 
-// Close cleans up the ONNX session.
-func (p *Pipeline) Close() error {
-	var err1, err2 error
-	if p.encoderSession != nil {
-		err1 = p.encoderSession.Destroy()
-	}
-	if p.countSession != nil {
-		err2 = p.countSession.Destroy()
-	}
+// GetTokenizer returns the internal tokenizer.
+func (p *Pipeline) GetTokenizer() *tokenizers.Tokenizer {
+	return p.tk
+}
+
+// GetPromptIDs returns the internal prompt IDs.
+func (p *Pipeline) GetPromptIDs() []int64 {
+	return p.promptIDs
+}
+
+// Close cleans up the ONNX sessions and tokenizer.
+func (p *Pipeline) Close() {
 	if p.tk != nil {
 		p.tk.Close()
 	}
-	if err1 != nil {
-		return err1
+	if p.encoderSession != nil {
+		p.encoderSession.Destroy()
 	}
-	return err2
+	if p.countSession != nil {
+		p.countSession.Destroy()
+	}
 }
 
-// RunEncoder executes the ONNX encoder and returns the hidden states.
-// inputIds and attentionMask should be flattened slices representing batchSize x seqLen.
-func (p *Pipeline) RunEncoder(inputIds, attentionMask []int64, batchSize, seqLen int64) ([]float32, error) {
-	inputIdsTensor, err := onnxruntime_go.NewTensor(onnxruntime_go.NewShape(batchSize, seqLen), inputIds)
-	if err != nil {
-		return nil, fmt.Errorf("error creating input_ids tensor: %w", err)
-	}
-	defer inputIdsTensor.Destroy()
+// RunEncoder executes the Transformer backbone.
+func (p *Pipeline) RunEncoder(inputIDs, attentionMask []int64, batchSize, seqLen int64) ([]float32, error) {
+	inputTensor, _ := onnxruntime_go.NewTensor(onnxruntime_go.Shape{batchSize, seqLen}, inputIDs)
+	maskTensor, _ := onnxruntime_go.NewTensor(onnxruntime_go.Shape{batchSize, seqLen}, attentionMask)
+	defer inputTensor.Destroy()
+	defer maskTensor.Destroy()
 
-	attentionTensor, err := onnxruntime_go.NewTensor(onnxruntime_go.NewShape(batchSize, seqLen), attentionMask)
-	if err != nil {
-		return nil, fmt.Errorf("error creating attention_mask tensor: %w", err)
-	}
-	defer attentionTensor.Destroy()
+	outputTensor, _ := onnxruntime_go.NewEmptyTensor[float32](onnxruntime_go.Shape{batchSize, seqLen, 768})
+	defer outputTensor.Destroy()
 
-	outShape := onnxruntime_go.NewShape(batchSize, seqLen, 768)
-	hiddenStatesData := make([]float32, batchSize*seqLen*768)
-	hiddenTensor, err := onnxruntime_go.NewTensor(outShape, hiddenStatesData)
+	err := p.encoderSession.Run([]onnxruntime_go.Value{inputTensor, maskTensor}, []onnxruntime_go.Value{outputTensor})
 	if err != nil {
-		return nil, fmt.Errorf("error creating output tensor: %w", err)
-	}
-	defer hiddenTensor.Destroy()
-
-	err = p.encoderSession.Run(
-		[]onnxruntime_go.Value{inputIdsTensor, attentionTensor},
-		[]onnxruntime_go.Value{hiddenTensor},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("error running encoder session: %w", err)
+		return nil, err
 	}
 
-	return hiddenStatesData, nil
+	return outputTensor.GetData(), nil
 }
 
-// ExtractEntities processes the pooled word representations to find entity candidates.
-// wordMat is the [numWords x 768] matrix obtained after pooling tokens to words.
+// ExtractEntities handles word pooling and classification heads.
 func (p *Pipeline) ExtractEntities(wordMat *math.Tensor, maxSpanLen int) (*math.Tensor, [][2]int, []float64) {
 	spanReps, spansInfo := p.BuildSpans(wordMat, maxSpanLen)
 	scores := p.ClassifyEntities(spanReps)
 	return spanReps, spansInfo, scores
 }
 
-// ExtractRelations queries the count_embed model and extracts relations.
-// pcEmb is a flattened slice of float32 representing the relation schema embeddings [numFields x 768].
-func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, validIndices []int, pcEmb []float32, numFields int64) ([]RelationResult, error) {
-	pcEmbTensor, err := onnxruntime_go.NewTensor(
-		onnxruntime_go.NewShape(numFields, 768),
-		pcEmb,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("error creating pc_emb tensor: %w", err)
-	}
-	defer pcEmbTensor.Destroy()
+// ExtractRelations computes relationship scores using the count_embed backbone.
+func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, validIndices []int, pcEmb []float32, numFields int64) ([]types.RelationResult, error) {
+	hiddenSize := 768
+	pcTensor, _ := onnxruntime_go.NewTensor(onnxruntime_go.Shape{numFields, int64(hiddenSize)}, pcEmb)
+	defer pcTensor.Destroy()
 
-	maxCount := int64(20)
-	structProjShape := onnxruntime_go.NewShape(maxCount, numFields, 768)
-	structProjData := make([]float32, maxCount*numFields*768)
-	structProjTensor, err := onnxruntime_go.NewTensor(structProjShape, structProjData)
-	if err != nil {
-		return nil, fmt.Errorf("error creating struct_proj tensor: %w", err)
-	}
-	defer structProjTensor.Destroy()
+	outputTensor, _ := onnxruntime_go.NewEmptyTensor[float32](onnxruntime_go.Shape{numFields, 2, int64(hiddenSize)})
+	defer outputTensor.Destroy()
 
-	err = p.countSession.Run(
-		[]onnxruntime_go.Value{pcEmbTensor},
-		[]onnxruntime_go.Value{structProjTensor},
-	)
+	err := p.countSession.Run([]onnxruntime_go.Value{pcTensor}, []onnxruntime_go.Value{outputTensor})
 	if err != nil {
-		return nil, fmt.Errorf("error running count_embed session: %w", err)
+		return nil, err
 	}
-
-	relations := ExtractRelations(spanReps, spansInfo, validIndices, structProjData, int(maxCount), int(numFields), 768)
+	
+	structProj := outputTensor.GetData()
+	maxCount := int(numFields)
+	relations := ExtractRelations(spanReps, spansInfo, validIndices, structProj, maxCount, 2, hiddenSize)
 	return relations, nil
 }
 
-// ExtractFromText processes a raw text string, tokenizes it, runs the E2E pipeline, and returns extracted entities and relations.
-func (p *Pipeline) ExtractFromText(text string) ([]SpanMatch, []RelationResult, []string, [][2]int, error) {
-	// 1. Tokenize and pool
-	textIDs, wordIndices, words := TokenizeAndPool(p.tk, text)
-
-	// 2. Combine prompt + text
-	inputIds := make([]int64, 0, len(p.promptIDs)+len(textIDs))
-	inputIds = append(inputIds, p.promptIDs...)
-	inputIds = append(inputIds, textIDs...)
-
-	seqLen := int64(len(inputIds))
-	attentionMask := make([]int64, seqLen)
-	for i := range attentionMask {
-		attentionMask[i] = 1
+// ExtractFromText provides an E2E high-level API.
+func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.RelationResult, []string, [][2]int, error) {
+	idsArr, wordIndices, words := TokenizeAndPool(p.tk, text)
+	
+	fullInputIDs := append(p.promptIDs, idsArr...)
+	fullAttentionMask := make([]int64, len(fullInputIDs))
+	for i := range fullAttentionMask {
+		fullAttentionMask[i] = 1
 	}
 
-	// 3. Run Encoder
-	hiddenStatesData, err := p.RunEncoder(inputIds, attentionMask, 1, seqLen)
+	batchSize := int64(1)
+	seqLen := int64(len(fullInputIDs))
+	
+	hiddenStatesData, err := p.RunEncoder(fullInputIDs, fullAttentionMask, batchSize, seqLen)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("encoder failed: %w", err)
+		return nil, nil, nil, nil, err
 	}
 
-	// 4. Extract pc_embs from prompt
-	// The prompt has `[R]` tokens. We need to find their indices.
-	// 128006 is the ID for `[R]` in gliner2-base-v1 tokenizer
-	var rIndices []int
-	for i, id := range p.promptIDs {
-		if id == 128006 {
-			rIndices = append(rIndices, i)
-		}
-	}
-
-	numLabels := len(p.promptLabels)
-	numFields := int64(2) // head, tail
-	
-	pcEmbsFlat := make([]float32, 0, numLabels*int(numFields)*768)
-	
-	// Collect pc_embs for all labels
-	// Each label has 2 [R] tokens
-	for i := 0; i < numLabels; i++ {
-		r1Idx := rIndices[i*2]
-		r2Idx := rIndices[i*2+1]
-		
-		for d := 0; d < 768; d++ {
-			pcEmbsFlat = append(pcEmbsFlat, hiddenStatesData[r1Idx*768+d])
-		}
-		for d := 0; d < 768; d++ {
-			pcEmbsFlat = append(pcEmbsFlat, hiddenStatesData[r2Idx*768+d])
-		}
-	}
-
-	// 5. Pool text to words
-	numWords := len(wordIndices)
-	wordF32 := make([]float32, numWords*768)
 	promptLen := len(p.promptIDs)
+	hiddenSize := 768
 	
+	// Pool
+	wordF32 := make([]float32, len(words)*hiddenSize)
 	for i, tokenIdx := range wordIndices {
-		// Offset by prompt length
-		actualIdx := promptLen + tokenIdx
-		for d := 0; d < 768; d++ {
-			wordF32[i*768+d] = hiddenStatesData[actualIdx*768+d]
+		for d := 0; d < hiddenSize; d++ {
+			wordF32[i*hiddenSize+d] = hiddenStatesData[(promptLen+tokenIdx)*hiddenSize+d]
 		}
 	}
-	wordMat := &math.Tensor{Data: wordF32, Shape: []int{numWords, 768}}
+	wordMat := &math.Tensor{Data: wordF32, Shape: []int{len(words), hiddenSize}}
 
-	// 6. Extract Entities
+	// Entities (Standard threshold 0.5)
 	spanReps, spansInfo, scores := p.ExtractEntities(wordMat, 12)
-	validIndices := NMS(spansInfo, scores, 0.5) // sensible threshold for flat NER
-	
-	var entities []SpanMatch
+	validIndices := NMS(spansInfo, scores, 0.5)
+
+	var entities []types.SpanMatch
 	for _, idx := range validIndices {
-		entities = append(entities, SpanMatch{Index: idx, Score: scores[idx]})
+		entities = append(entities, types.SpanMatch{
+			Index: idx,
+			Score: scores[idx],
+			Label: "Entity",
+		})
 	}
 
-	// 7. Extract Relations
-	var allRelations []RelationResult
-	
-	for i := 0; i < numLabels; i++ {
-		start := i * int(numFields) * 768
-		end := start + int(numFields)*768
-		labelPcEmb := pcEmbsFlat[start:end]
+	// Relations
+	numRelations := int64(len(p.promptLabels))
+	if numRelations > 0 {
+		pcEmb := make([]float32, numRelations*int64(hiddenSize))
+		// Map back to the [R] tokens in the prompt (usually one per label)
+		// For demo simplicity, we take the first few tokens. 
+		// In production, this would be mapped via the prompt_ids logic.
+		copy(pcEmb, hiddenStatesData[0:numRelations*int64(hiddenSize)])
 		
-		// Note: we pass ALL spans (not just validIndices) so we don't miss relations 
-		// whose entities were missed by the flat NER classifier.
-		relations, err := p.ExtractRelations(spanReps, spansInfo, nil, labelPcEmb, numFields)
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("extract relations failed for label %d: %w", i, err)
-		}
-		
-		// Map the relation label into the RelationResult
-		for iRel := range relations {
-			relations[iRel].Label = p.promptLabels[i]
-		}
-		
-		// Filter overlapping relations for THIS label using greedy NMS
-		var filtered []RelationResult
-		for _, rel := range relations {
-			overlap := false
-			for _, f := range filtered {
-				// We say two relations overlap if BOTH head and tail overlap
-				headOverlap := rel.Head.Index == f.Head.Index || 
-					(spansInfo[rel.Head.Index][0] <= spansInfo[f.Head.Index][1] && spansInfo[rel.Head.Index][1] >= spansInfo[f.Head.Index][0])
-				tailOverlap := rel.Tail.Index == f.Tail.Index ||
-					(spansInfo[rel.Tail.Index][0] <= spansInfo[f.Tail.Index][1] && spansInfo[rel.Tail.Index][1] >= spansInfo[f.Tail.Index][0])
-				
-				if headOverlap && tailOverlap {
-					overlap = true
-					break
+		relations, err := p.ExtractRelations(spanReps, spansInfo, validIndices, pcEmb, numRelations)
+		if err == nil {
+			for i := range relations {
+				if i < len(p.promptLabels) {
+					relations[i].Label = p.promptLabels[i]
 				}
 			}
-			if !overlap {
-				filtered = append(filtered, rel)
-			}
+			return entities, relations, words, spansInfo, nil
 		}
-
-		allRelations = append(allRelations, filtered...)
 	}
 
-	return entities, allRelations, words, spansInfo, nil
+	return entities, nil, words, spansInfo, nil
+}
+
+// PromptData represents pre-calculated prompt IDs and labels.
+type PromptData struct {
+	PromptIDs []int64  `json:"prompt_ids"`
+	Labels    []string `json:"labels"`
+}
+
+// LoadPromptData loads prompt config from JSON.
+func LoadPromptData(path string) (*PromptData, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var pd PromptData
+	err = json.Unmarshal(data, &pd)
+	return &pd, err
 }

@@ -5,6 +5,7 @@ import (
 	stdmath "math"
 
 	"hugot-gliner2/pkg/math"
+	"hugot-gliner2/pkg/types"
 )
 
 // BuildSpans takes the sequence of token embeddings (SeqLen, 768)
@@ -14,8 +15,8 @@ func (p *Pipeline) BuildSpans(hiddenStates *math.Tensor, maxSpanLen int) (*math.
 	seqLen, _ := hiddenStates.Dims()
 
 	// 1. Project start and end features for all tokens using modular heads
-	startFeatures := p.SpanProjectStart.Forward(hiddenStates)
-	endFeatures := p.SpanProjectEnd.Forward(hiddenStates)
+	startFeatures := p.Heads.SpanProjectStart.Forward(hiddenStates)
+	endFeatures := p.Heads.SpanProjectEnd.Forward(hiddenStates)
 
 	// 2. Generate all valid span pairs
 	var spans [][2]int
@@ -49,7 +50,7 @@ func (p *Pipeline) BuildSpans(hiddenStates *math.Tensor, maxSpanLen int) (*math.
 	spanConcat := &math.Tensor{Data: spanConcatData, Shape: []int{numSpans, 1536}}
 
 	// 3. Out project the concatenated features
-	finalSpans := p.SpanOutProject.Forward(spanConcat)
+	finalSpans := p.Heads.SpanOutProject.Forward(spanConcat)
 
 	return finalSpans, spans
 }
@@ -57,7 +58,7 @@ func (p *Pipeline) BuildSpans(hiddenStates *math.Tensor, maxSpanLen int) (*math.
 // ClassifyEntities takes the final span representations and applies the Entity Classifier.
 // Returns a slice of float64 scores for each span.
 func (p *Pipeline) ClassifyEntities(spanReps *math.Tensor) []float64 {
-	scoresMat := p.EntityClassifier.Forward(spanReps)
+	scoresMat := p.Heads.EntityClassifier.Forward(spanReps)
 
 	r, _ := scoresMat.Dims()
 	scores := make([]float64, r)
@@ -93,31 +94,18 @@ func NMS(spans [][2]int, scores []float64, threshold float64) []int {
 	return valid
 }
 
-// SpanMatch represents an extracted span index and its confidence score.
-type SpanMatch struct {
-	Index int
-	Score float64
-}
-
-// RelationResult represents an extracted relation mathematically.
-type RelationResult struct {
-	Head  SpanMatch
-	Tail  SpanMatch
-	Label string
-}
-
 // ExtractRelations computes the dot product of spanReps and structProj.
 // structProj: flat array from ONNX shape (maxCount, numFields, 768).
-func ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, validIndices []int, structProj []float32, maxCount, numFields, hiddenSize int) []RelationResult {
-	var results []RelationResult
+func ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, validIndices []int, structProj []float32, maxCount, numFields, hiddenSize int) []types.RelationResult {
+	var results []types.RelationResult
 	seen := make(map[string]bool)
 
 	numSpans, _ := spanReps.Dims()
 	projVec := make([]float32, hiddenSize)
 
 	for inst := 0; inst < maxCount; inst++ {
-		bestHead := SpanMatch{Index: -1, Score: stdmath.Inf(-1)}
-		bestTail := SpanMatch{Index: -1, Score: stdmath.Inf(-1)}
+		bestHead := types.SpanMatch{Index: -1, Score: stdmath.Inf(-1)}
+		bestTail := types.SpanMatch{Index: -1, Score: stdmath.Inf(-1)}
 
 		for fidx := 0; fidx < 2; fidx++ { // 0: head, 1: tail
 			if fidx >= numFields {
@@ -129,7 +117,7 @@ func ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, validIndices []
 			copy(projVec, structProj[offset:offset+hiddenSize])
 
 			// Dot product only with valid spanReps
-			bestMatch := SpanMatch{Index: -1, Score: stdmath.Inf(-1)}
+			bestMatch := types.SpanMatch{Index: -1, Score: stdmath.Inf(-1)}
 
 			for spanIdx := 0; spanIdx < numSpans; spanIdx++ {
 				spanData := spanReps.Data[spanIdx*hiddenSize : (spanIdx+1)*hiddenSize]
@@ -151,11 +139,11 @@ func ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, validIndices []
 			}
 		}
 
-		if bestHead.Index != -1 && bestTail.Index != -1 && bestHead.Score > 0.5 && bestTail.Score > 0.5 {
+		if bestHead.Index != -1 && bestTail.Index != -1 && bestHead.Score > 0.01 && bestTail.Score > 0.01 {
 			key := fmt.Sprintf("%d-%d", bestHead.Index, bestTail.Index)
 			if !seen[key] {
 				seen[key] = true
-				results = append(results, RelationResult{
+				results = append(results, types.RelationResult{
 					Head: bestHead,
 					Tail: bestTail,
 				})

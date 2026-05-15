@@ -3,12 +3,13 @@ package main
 import (
 	"testing"
 	"hugot-gliner2/pkg/gliner"
-	"hugot-gliner2/pkg/layers"
 	"hugot-gliner2/pkg/math"
 )
 
 func TestHeadsIntegration(t *testing.T) {
-	p := &gliner.Pipeline{}
+	p := &gliner.Pipeline{
+		Heads: &gliner.Heads{},
+	}
 
 	// Create weights
 	w1 := &math.Tensor{Data: make([]float32, 768*1536), Shape: []int{768, 1536}}
@@ -19,14 +20,14 @@ func TestHeadsIntegration(t *testing.T) {
 	for i := range w1.Data { w1.Data[i] = 0.001 }
 	for i := range w2.Data { w2.Data[i] = 0.001 }
 
-	// Create layers explicitly
-	l1 := &layers.LinearLayer{Weight: w1, Bias: b1}
-	act1 := &layers.ActivationLayer{Fn: math.ReLU}
-	l2 := &layers.LinearLayer{Weight: w2, Bias: b2}
-	act2 := &layers.ActivationLayer{Fn: math.Sigmoid}
+	// Create layers explicitly as values (using gliner package types)
+	l1 := gliner.LinearLayer{Weight: w1, Bias: b1}
+	act1 := gliner.ActivationLayer{Fn: math.ReLU}
+	l2 := gliner.LinearLayer{Weight: w2, Bias: b2}
+	act2 := gliner.ActivationLayer{Fn: math.Sigmoid}
 
-	p.EntityClassifier = &layers.SequentialModule{
-		Modules: []layers.Module{l1, act1, l2, act2},
+	p.Heads.EntityClassifier = &gliner.SequentialModule{
+		Modules: []gliner.Module{l1, act1, l2, act2},
 	}
 
 	projW := &math.Tensor{Data: make([]float32, 768*768), Shape: []int{768, 768}}
@@ -34,11 +35,11 @@ func TestHeadsIntegration(t *testing.T) {
 	
 	projB := &math.Tensor{Data: make([]float32, 768), Shape: []int{768}}
 	
-	p.SpanProjectStart = &layers.LinearLayer{Weight: projW, Bias: projB}
-	p.SpanProjectEnd = &layers.LinearLayer{Weight: projW, Bias: projB}
+	p.Heads.SpanProjectStart = gliner.LinearLayer{Weight: projW, Bias: projB}
+	p.Heads.SpanProjectEnd = gliner.LinearLayer{Weight: projW, Bias: projB}
 	
 	outW := &math.Tensor{Data: make([]float32, 768*1536), Shape: []int{768, 1536}}
-	p.SpanOutProject = &layers.LinearLayer{Weight: outW, Bias: projB}
+	p.Heads.SpanOutProject = gliner.LinearLayer{Weight: outW, Bias: projB}
 
 	wordMat := &math.Tensor{
 		Data:  make([]float32, 3*768),

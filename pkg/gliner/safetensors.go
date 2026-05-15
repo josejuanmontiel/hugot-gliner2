@@ -7,9 +7,64 @@ import (
 	"io"
 	stdmath "math"
 	"os"
+	"sort"
 
 	"hugot-gliner2/pkg/math"
 )
+
+// SaveSafetensors writes a map of tensors to a file in Safetensors format.
+func SaveSafetensors(path string, tensors map[string]*math.Tensor) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// 1. Prepare header
+	header := make(map[string]interface{})
+	offset := uint64(0)
+	for name, t := range tensors {
+		size := uint64(len(t.Data) * 4)
+		header[name] = map[string]interface{}{
+			"dtype":     "F32",
+			"shape":     t.Shape,
+			"data_offsets": []uint64{offset, offset + size},
+		}
+		offset += size
+	}
+
+	headerJSON, _ := json.Marshal(header)
+	headerSize := uint64(len(headerJSON))
+
+	// 2. Write header size (uint64, little-endian)
+	if err := binary.Write(f, binary.LittleEndian, headerSize); err != nil {
+		return err
+	}
+
+	// 3. Write header JSON
+	if _, err := f.Write(headerJSON); err != nil {
+		return err
+	}
+
+	// 4. Write data buffer
+	for _, name := range sortedKeys(tensors) { // Sort keys to match offsets
+		t := tensors[name]
+		if err := binary.Write(f, binary.LittleEndian, t.Data); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func sortedKeys(m map[string]*math.Tensor) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 type TensorInfo struct {
 	Dtype       string `json:"dtype"`

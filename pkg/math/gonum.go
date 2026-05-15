@@ -80,3 +80,39 @@ func Dot(a, b []float32) float32 {
 	}
 	return sum
 }
+// GELU applies the Gaussian Error Linear Unit activation.
+func GELU(x *Tensor) {
+	for i := range x.Data {
+		v := float64(x.Data[i])
+		x.Data[i] = float32(0.5 * v * (1.0 + stdmath.Tanh(stdmath.Sqrt(2.0/stdmath.Pi)*(v+0.044715*stdmath.Pow(v, 3.0)))))
+	}
+}
+
+// SiLU (Swish) applies x * sigmoid(x).
+func SiLU(x *Tensor) {
+	for i := range x.Data {
+		v := float64(x.Data[i])
+		sig := 1.0 / (1.0 + stdmath.Exp(-v))
+		x.Data[i] = float32(v * sig)
+	}
+}
+
+// Biaffine applies a bilinear transformation. Stub for DSL showcase.
+func Biaffine(x1, x2, weight *Tensor) *Tensor {
+	// Uses the same native logic for simplicity in this demo
+	rows1, cols1 := x1.Dims()
+	rows2, cols2 := x2.Dims()
+	outData := make([]float32, rows1*rows2)
+	for i := 0; i < rows1; i++ {
+		for j := 0; j < rows2; j++ {
+			var sum float32
+			for k := 0; k < cols1; k++ {
+				for l := 0; l < cols2; l++ {
+					sum += x1.Data[i*cols1+k] * x2.Data[j*cols2+l]
+				}
+			}
+			outData[i*rows2+j] = sum
+		}
+	}
+	return &Tensor{Data: outData, Shape: []int{rows1, rows2}}
+}

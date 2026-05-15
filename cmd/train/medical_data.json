@@ -1,0 +1,52 @@
+[
+  {
+    "text": "The patient reports a sharp headache and persistent dizziness.",
+    "labels": ["headache", "dizziness"],
+    "type": "Symptom"
+  },
+  {
+    "text": "Subject is experiencing high fever and muscle aches since yesterday.",
+    "labels": ["high fever", "muscle aches"],
+    "type": "Symptom"
+  },
+  {
+    "text": "El paciente sufre de tos seca y dificultad para respirar.",
+    "labels": ["tos seca", "dificultad para respirar"],
+    "type": "Symptom"
+  },
+  {
+    "text": "Nausea and loss of appetite are common side effects.",
+    "labels": ["Nausea", "loss of appetite"],
+    "type": "Symptom"
+  },
+  {
+    "text": "Siento un dolor punzante en el pecho y sudores fríos.",
+    "labels": ["dolor punzante en el pecho", "sudores fríos"],
+    "type": "Symptom"
+  },
+  {
+    "text": "Chronic fatigue and joint pain have worsened over time.",
+    "labels": ["Chronic fatigue", "joint pain"],
+    "type": "Symptom"
+  },
+  {
+    "text": "La inflamación de las articulaciones es un síntoma claro.",
+    "labels": ["inflamación de las articulaciones"],
+    "type": "Symptom"
+  },
+  {
+    "text": "Paciente con escalofríos, congestión nasal y estornudos frecuentes.",
+    "labels": ["escalofríos", "congestión nasal", "estornudos"],
+    "type": "Symptom"
+  },
+  {
+    "text": "Severe abdominal pain followed by repeated vomiting.",
+    "labels": ["abdominal pain", "vomiting"],
+    "type": "Symptom"
+  },
+  {
+    "text": "Vision blurriness and sensitivity to light.",
+    "labels": ["Vision blurriness", "sensitivity to light"],
+    "type": "Symptom"
+  }
+]
