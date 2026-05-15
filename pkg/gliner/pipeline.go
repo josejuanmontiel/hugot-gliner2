@@ -5,47 +5,32 @@ import (
 	"fmt"
 	"os"
 
+	"hugot-gliner2/pkg/layers"
+	"hugot-gliner2/pkg/math"
+
 	"github.com/daulet/tokenizers"
 	"github.com/yalue/onnxruntime_go"
-	"gonum.org/v1/gonum/mat"
 )
-
-// ModelWeights holds the Gonum matrices for the classification heads.
-type ModelWeights struct {
-	SpanProjectStart0W *mat.Dense
-	SpanProjectStart0B *mat.Dense
-	SpanProjectStart3W *mat.Dense
-	SpanProjectStart3B *mat.Dense
-
-	SpanProjectEnd0W *mat.Dense
-	SpanProjectEnd0B *mat.Dense
-	SpanProjectEnd3W *mat.Dense
-	SpanProjectEnd3B *mat.Dense
-
-	SpanOutProject0W *mat.Dense
-	SpanOutProject0B *mat.Dense
-	SpanOutProject3W *mat.Dense
-	SpanOutProject3B *mat.Dense
-
-	Classifier0W *mat.Dense
-	Classifier0B *mat.Dense
-	Classifier2W *mat.Dense
-	Classifier2B *mat.Dense
-}
 
 // Pipeline represents the GLiNER inference pipeline.
 type Pipeline struct {
 	encoderSession *onnxruntime_go.DynamicAdvancedSession
 	countSession   *onnxruntime_go.DynamicAdvancedSession
-	weights        *ModelWeights
-	labels         []string // The entity/relation labels
-	tk             *tokenizers.Tokenizer
-	promptIDs      []int64
-	promptLabels   []string
+
+	// Modular Classification Heads
+	SpanProjectStart layers.Module
+	SpanProjectEnd   layers.Module
+	SpanOutProject   layers.Module
+	EntityClassifier layers.Module
+
+	labels       []string // The entity/relation labels
+	tk           *tokenizers.Tokenizer
+	promptIDs    []int64
+	promptLabels []string
 }
 
 // getTensor is a helper to safely extract a tensor by name.
-func getTensor(tensors map[string]*mat.Dense, name string) (*mat.Dense, error) {
+func getTensor(tensors map[string]*math.Tensor, name string) (*math.Tensor, error) {
 	t, ok := tensors[name]
 	if !ok {
 		return nil, fmt.Errorf("missing tensor: %s", name)
@@ -112,53 +97,54 @@ func NewPipeline(encoderPath, countEmbedPath, safetensorsPath, tokenizerPath, pr
 		return nil, fmt.Errorf("failed to load safetensors: %w", err)
 	}
 
-	w := &ModelWeights{}
-	var errExt error
-
-	// Helper to extract and assign
-	assign := func(target **mat.Dense, name string) {
-		if errExt != nil {
-			return
-		}
-		*target, errExt = getTensor(rawTensors, name)
-	}
-
-	assign(&w.SpanProjectStart0W, "span_rep.span_rep_layer.project_start.0.weight")
-	assign(&w.SpanProjectStart0B, "span_rep.span_rep_layer.project_start.0.bias")
-	assign(&w.SpanProjectStart3W, "span_rep.span_rep_layer.project_start.3.weight")
-	assign(&w.SpanProjectStart3B, "span_rep.span_rep_layer.project_start.3.bias")
-
-	assign(&w.SpanProjectEnd0W, "span_rep.span_rep_layer.project_end.0.weight")
-	assign(&w.SpanProjectEnd0B, "span_rep.span_rep_layer.project_end.0.bias")
-	assign(&w.SpanProjectEnd3W, "span_rep.span_rep_layer.project_end.3.weight")
-	assign(&w.SpanProjectEnd3B, "span_rep.span_rep_layer.project_end.3.bias")
-
-	assign(&w.SpanOutProject0W, "span_rep.span_rep_layer.out_project.0.weight")
-	assign(&w.SpanOutProject0B, "span_rep.span_rep_layer.out_project.0.bias")
-	assign(&w.SpanOutProject3W, "span_rep.span_rep_layer.out_project.3.weight")
-	assign(&w.SpanOutProject3B, "span_rep.span_rep_layer.out_project.3.bias")
-
-	assign(&w.Classifier0W, "classifier.0.weight")
-	assign(&w.Classifier0B, "classifier.0.bias")
-	assign(&w.Classifier2W, "classifier.2.weight")
-	assign(&w.Classifier2B, "classifier.2.bias")
-
-	if errExt != nil {
-		encoderSession.Destroy()
-		countSession.Destroy()
-		tk.Close()
-		return nil, fmt.Errorf("error mapping weights: %w", errExt)
-	}
-
-	return &Pipeline{
+	// Define our modular heads using the layers package
+	p := &Pipeline{
 		encoderSession: encoderSession,
 		countSession:   countSession,
-		weights:        w,
 		labels:         promptData.Labels,
 		tk:             tk,
 		promptIDs:      promptData.PromptIDs,
 		promptLabels:   promptData.Labels,
-	}, nil
+	}
+
+	// Span Project Start: Linear(0) -> ReLU -> Linear(3)
+	p.SpanProjectStart = &layers.SequentialModule{
+		Modules: []layers.Module{
+			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_start.0.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_start.0.bias"]},
+			&layers.ActivationLayer{Fn: math.ReLU},
+			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_start.3.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_start.3.bias"]},
+		},
+	}
+
+	// Span Project End: Linear(0) -> ReLU -> Linear(3)
+	p.SpanProjectEnd = &layers.SequentialModule{
+		Modules: []layers.Module{
+			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_end.0.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_end.0.bias"]},
+			&layers.ActivationLayer{Fn: math.ReLU},
+			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.project_end.3.weight"], Bias: rawTensors["span_rep.span_rep_layer.project_end.3.bias"]},
+		},
+	}
+
+	// Span Out Project: Linear(0) -> ReLU -> Linear(3)
+	p.SpanOutProject = &layers.SequentialModule{
+		Modules: []layers.Module{
+			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.out_project.0.weight"], Bias: rawTensors["span_rep.span_rep_layer.out_project.0.bias"]},
+			&layers.ActivationLayer{Fn: math.ReLU},
+			&layers.LinearLayer{Weight: rawTensors["span_rep.span_rep_layer.out_project.3.weight"], Bias: rawTensors["span_rep.span_rep_layer.out_project.3.bias"]},
+		},
+	}
+
+	// Entity Classifier: Linear(0) -> ReLU -> Linear(2) -> Sigmoid
+	p.EntityClassifier = &layers.SequentialModule{
+		Modules: []layers.Module{
+			&layers.LinearLayer{Weight: rawTensors["classifier.0.weight"], Bias: rawTensors["classifier.0.bias"]},
+			&layers.ActivationLayer{Fn: math.ReLU},
+			&layers.LinearLayer{Weight: rawTensors["classifier.2.weight"], Bias: rawTensors["classifier.2.bias"]},
+			&layers.ActivationLayer{Fn: math.Sigmoid},
+		},
+	}
+
+	return p, nil
 }
 
 // Close cleans up the ONNX session.
@@ -215,7 +201,7 @@ func (p *Pipeline) RunEncoder(inputIds, attentionMask []int64, batchSize, seqLen
 
 // ExtractEntities processes the pooled word representations to find entity candidates.
 // wordMat is the [numWords x 768] matrix obtained after pooling tokens to words.
-func (p *Pipeline) ExtractEntities(wordMat *mat.Dense, maxSpanLen int) (*mat.Dense, [][2]int, []float64) {
+func (p *Pipeline) ExtractEntities(wordMat *math.Tensor, maxSpanLen int) (*math.Tensor, [][2]int, []float64) {
 	spanReps, spansInfo := p.BuildSpans(wordMat, maxSpanLen)
 	scores := p.ClassifyEntities(spanReps)
 	return spanReps, spansInfo, scores
@@ -223,7 +209,7 @@ func (p *Pipeline) ExtractEntities(wordMat *mat.Dense, maxSpanLen int) (*mat.Den
 
 // ExtractRelations queries the count_embed model and extracts relations.
 // pcEmb is a flattened slice of float32 representing the relation schema embeddings [numFields x 768].
-func (p *Pipeline) ExtractRelations(spanReps *mat.Dense, spansInfo [][2]int, validIndices []int, pcEmb []float32, numFields int64) ([]RelationResult, error) {
+func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, validIndices []int, pcEmb []float32, numFields int64) ([]RelationResult, error) {
 	pcEmbTensor, err := onnxruntime_go.NewTensor(
 		onnxruntime_go.NewShape(numFields, 768),
 		pcEmb,
@@ -307,18 +293,17 @@ func (p *Pipeline) ExtractFromText(text string) ([]SpanMatch, []RelationResult, 
 
 	// 5. Pool text to words
 	numWords := len(wordIndices)
-	wordF64 := make([]float64, numWords*768)
+	wordF32 := make([]float32, numWords*768)
 	promptLen := len(p.promptIDs)
 	
 	for i, tokenIdx := range wordIndices {
 		// Offset by prompt length
 		actualIdx := promptLen + tokenIdx
 		for d := 0; d < 768; d++ {
-			val := hiddenStatesData[actualIdx*768+d]
-			wordF64[i*768+d] = float64(val)
+			wordF32[i*768+d] = hiddenStatesData[actualIdx*768+d]
 		}
 	}
-	wordMat := mat.NewDense(numWords, 768, wordF64)
+	wordMat := &math.Tensor{Data: wordF32, Shape: []int{numWords, 768}}
 
 	// 6. Extract Entities
 	spanReps, spansInfo, scores := p.ExtractEntities(wordMat, 12)

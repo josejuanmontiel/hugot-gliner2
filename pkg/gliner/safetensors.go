@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
+	stdmath "math"
 	"os"
 
-	"gonum.org/v1/gonum/mat"
+	"hugot-gliner2/pkg/math"
 )
 
 type TensorInfo struct {
@@ -17,9 +17,7 @@ type TensorInfo struct {
 	DataOffsets []int  `json:"data_offsets"`
 }
 
-type SafetensorsHeader map[string]json.RawMessage
-
-func LoadSafetensors(path string) (map[string]*mat.Dense, error) {
+func LoadSafetensors(path string) (map[string]*math.Tensor, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open safetensors file: %w", err)
@@ -40,20 +38,16 @@ func LoadSafetensors(path string) (map[string]*mat.Dense, error) {
 		return nil, fmt.Errorf("failed to read JSON header: %w", err)
 	}
 
-	var header SafetensorsHeader
+	var header map[string]json.RawMessage
 	err = json.Unmarshal(headerBytes, &header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON header: %w", err)
 	}
 
-	// The rest of the file is the data buffer.
-	// We read it all into memory for fast slicing.
-	dataBuffer, err := io.ReadAll(file)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read data buffer: %w", err)
-	}
+	// The current position is the start of the data buffer
+	dataStart, _ := file.Seek(0, io.SeekCurrent)
 
-	tensors := make(map[string]*mat.Dense)
+	tensors := make(map[string]*math.Tensor)
 
 	for key, rawValue := range header {
 		if key == "__metadata__" {
@@ -65,39 +59,33 @@ func LoadSafetensors(path string) (map[string]*mat.Dense, error) {
 		}
 
 		if info.Dtype != "F32" {
-			// For GLiNER we expect F32. If other types appear, we'd handle them here.
 			return nil, fmt.Errorf("unsupported dtype %s for tensor %s", info.Dtype, key)
 		}
 
-		if len(info.DataOffsets) != 2 {
-			return nil, fmt.Errorf("invalid data_offsets for tensor %s", key)
+		startOffset := int64(info.DataOffsets[0])
+		endOffset := int64(info.DataOffsets[1])
+		size := endOffset - startOffset
+
+		// Read the tensor data
+		file.Seek(dataStart+startOffset, io.SeekStart)
+		tensorBytes := make([]byte, size)
+		_, err = io.ReadFull(file, tensorBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read data for tensor %s: %w", key, err)
 		}
 
-		start, end := info.DataOffsets[0], info.DataOffsets[1]
-		tensorBytes := dataBuffer[start:end]
-
-		// Convert bytes to []float64 (since gonum mat.Dense uses float64)
-		numElements := len(tensorBytes) / 4
-		dataF64 := make([]float64, numElements)
+		// Convert bytes to []float32
+		numElements := int(size / 4)
+		dataF32 := make([]float32, numElements)
 		for i := 0; i < numElements; i++ {
 			bits := binary.LittleEndian.Uint32(tensorBytes[i*4 : (i+1)*4])
-			val := math.Float32frombits(bits)
-			dataF64[i] = float64(val)
+			dataF32[i] = stdmath.Float32frombits(bits)
 		}
 
-		// Create gonum mat.Dense
-		var r, c int
-		if len(info.Shape) == 1 {
-			r = info.Shape[0]
-			c = 1
-		} else if len(info.Shape) == 2 {
-			r = info.Shape[0]
-			c = info.Shape[1]
-		} else {
-			return nil, fmt.Errorf("unsupported shape length %d for tensor %s", len(info.Shape), key)
+		tensors[key] = &math.Tensor{
+			Data:  dataF32,
+			Shape: info.Shape,
 		}
-
-		tensors[key] = mat.NewDense(r, c, dataF64)
 	}
 
 	return tensors, nil

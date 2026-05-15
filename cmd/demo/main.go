@@ -7,13 +7,14 @@ import (
 	"github.com/yalue/onnxruntime_go"
 
 	"hugot-gliner2/pkg/gliner"
+	"hugot-gliner2/pkg/ortinit"
 )
 
 func main() {
 	fmt.Println("🚀 Initializing GLiNER2 Pipeline Demo (E2E Text-to-Relations)...")
 
 	// 1. Initialize ONNX runtime environment robustly
-	err := gliner.SetupONNX()
+	err := ortinit.SetupONNX()
 	if err != nil {
 		log.Fatalf("Failed to initialize ONNX environment: %v", err)
 	}
@@ -34,10 +35,10 @@ func main() {
 	defer pipeline.Close()
 
 	// 3. Define raw text
-	text := "El pasado lunes, Elena Rodríguez, Directora de Operaciones de TechNova Solutions, anunció en la sede de Madrid la adquisición de la startup finlandesa Nordic AI. Según el acuerdo valorado en 45 millones de euros, el fundador de Nordic AI, Lukas Virtanen, se unirá al comité ejecutivo de TechNova. Esta operación fue supervisada por el Banco Santander, que actuó como asesor financiero principal, asegurando que la integración tecnológica comience el próximo mes de junio en sus oficinas de Helsinki."
+	text := "Last Monday, Elena Rodriguez, Chief Operating Officer of TechNova Solutions, announced in Madrid the acquisition of the Finnish startup Nordic AI. According to the agreement valued at 45 million euros, the founder of Nordic AI, Lukas Virtanen, will join the executive committee of TechNova. This operation was supervised by Banco Santander, which acted as the main financial advisor, ensuring that the technological integration begins next June in its Helsinki offices."
 	
-	fmt.Printf("\n📄 Procesando texto original:\n%s\n\n", text)
-	fmt.Println("🧠 Ejecutando pipeline E2E (Tokenización -> ONNX -> Gonum)...")
+	fmt.Printf("\n📄 Processing original text:\n%s\n\n", text)
+	fmt.Println("🧠 Running E2E pipeline (Tokenization -> ONNX -> Modular Math)...")
 
 	// 4. Run E2E Inference
 	entities, relations, words, spansInfo, err := pipeline.ExtractFromText(text)
@@ -58,16 +59,16 @@ func main() {
 		return txt
 	}
 
-	fmt.Printf("\n✨ Entidades Candidatas:\n")
+	fmt.Printf("\n✨ Candidate Entities:\n")
 	for _, ent := range entities {
 		fmt.Printf("   🔹 %s (score: %.4f)\n", getText(ent.Index), ent.Score)
 	}
 
-	fmt.Printf("\n🤝 Relaciones Extraídas:\n")
+	fmt.Printf("\n🤝 Extracted Relations:\n")
 	for _, rel := range relations {
-		fmt.Printf("   [%s] ---> %s ---> [%s] (Confianza: H=%.4f, T=%.4f)\n",
+		fmt.Printf("   [%s] ---> %s ---> [%s] (Confidence: H=%.4f, T=%.4f)\n",
 			getText(rel.Head.Index), rel.Label, getText(rel.Tail.Index), rel.Head.Score, rel.Tail.Score)
 	}
 	
-	fmt.Println("\n✅ Demo Finalizada.")
+	fmt.Println("\n✅ Demo Finished.")
 }
