@@ -1,42 +1,49 @@
-# GLiNER2 Algoritmo de Extracción E2E (Go-Native)
+# GLiNER2 E2E Extraction Algorithm (Go-Native)
 
-Este documento detalla el algoritmo interno implementado en `pkg/gliner` para realizar la extracción conjunta de entidades y relaciones usando ONNX y Gonum en Go.
+This document details the internal algorithm implemented in `pkg/gliner` to perform joint entity and relation extraction using ONNX and a modular mathematical engine in Go.
 
-## 1. Tokenización y Word Pooling (`processor.go`)
+## 1. Modular Mathematical Engine (`pkg/math`)
 
-A diferencia de los modelos Transformer estándar que asocian predicciones a subpalabras (tokens BPE), GLiNER requiere que la extracción se realice a nivel de **palabras completas**.
+The pipeline uses a switchable "backend" architecture for classification operations:
 
-1. **División de Palabras**: El texto original se divide en palabras utilizando la expresión regular `[\p{L}\p{N}]+|[^\p{L}\p{N}\s]+`. Esto separa letras/números de signos de puntuación, manteniendo la integridad de las palabras.
-2. **Tokenización BPE**: Todo el texto es tokenizado utilizando el `tokenizer.json` de HuggingFace, generando una lista de IDs de subpalabras y sus strings correspondientes (por ej. `▁Tech` y `Nova`).
-3. **Alineación**: Iteramos simultáneamente sobre la lista de palabras limpias y la lista de subpalabras BPE. Acumulamos subpalabras hasta reconstruir la palabra original.
-4. **Extracción de Índices**: Guardamos el índice de la *primera* subpalabra de cada palabra agrupada. Este vector (`text_word_indices`) es crucial para el paso de pooling.
+1. **Native Go (Default)**: Pure Go implementation, no external dependencies, optimized for portability and ease of integration.
+2. **Gonum (Optional)**: Optimized implementation using the `gonum` library, activated via build tags (`-tags gonum`).
 
-## 2. Cross-Encoder Prompting (`pipeline.go`)
+## 2. Tokenization and Word Pooling (`processor.go`)
 
-GLiNER es un modelo *Cross-Encoder* para la extracción de relaciones. Esto significa que la representación interna de las clases a predecir (el esquema) cambia dependiendo del contexto del texto.
+Unlike standard Transformer models that associate predictions with subwords (BPE tokens), GLiNER requires extraction to be performed at the **full word level**.
 
-1. **Prompt Estático**: Los IDs de los tokens correspondientes al esquema de relaciones están pre-calculados (por ej. `[P] trabaja en ( [R] head [R] tail )`).
-2. **Concatenación**: Construimos una secuencia de entrada combinada: `[Prompt IDs] + [SEP_TEXT] + [Text IDs]`.
-3. **Inferencia ONNX**: Pasamos esta secuencia larga por el modelo Transformer (Encoder). Dado el mecanismo de auto-atención, las palabras del texto prestan atención a las relaciones objetivo, y los tokens de relación (`[R]`) acumulan información semántica sobre el texto.
+1. **Word Splitting**: The original text is split into words using the regex `[\p{L}\p{N}]+|[^\p{L}\p{N}\s]+`. This separates letters/numbers from punctuation marks while maintaining word integrity.
+2. **BPE Tokenization**: The entire text is tokenized using the HuggingFace `tokenizer.json`, generating a list of subword IDs and their corresponding strings (e.g., `▁Tech` and `Nova`).
+3. **Alignment**: We iterate simultaneously over the list of clean words and the list of BPE subwords. Subwords are accumulated until the original word is reconstructed.
+4. **Index Extraction**: We store the index of the *first* subword of each grouped word. This vector (`text_word_indices`) is crucial for the pooling step.
 
-## 3. Extracción de Representaciones (`ExtractFromText`)
+## 3. Cross-Encoder Prompting (`pipeline.go`)
 
-El modelo devuelve un tensor gigante (`last_hidden_state`). Lo dividimos en dos partes:
+GLiNER is a *Cross-Encoder* model for relation extraction. This means the internal representation of the classes to be predicted (the schema) changes depending on the text context.
 
-- **Embeddings de Relaciones (`pc_embs`)**: Buscamos las posiciones de los tokens `[R]` dentro del prompt y extraemos sus vectores (dimensión 768). Estos vectores ahora representan matemáticamente los conceptos de *origen* (head) y *destino* (tail) para cada etiqueta de relación.
-- **Embeddings de Palabras**: Usando nuestro vector `text_word_indices`, saltamos a la posición de la primera subpalabra de cada palabra en el tensor y extraemos su representación (Word Pooling).
+1. **Static Prompt**: The IDs of the tokens corresponding to the relation schema are pre-calculated (e.g., `[P] works at ( [R] head [R] tail )`).
+2. **Concatenation**: We build a combined input sequence: `[Prompt IDs] + [SEP_TEXT] + [Text IDs]`.
+3. **ONNX Inference**: We pass this long sequence through the Transformer model (Encoder). Due to the self-attention mechanism, text words pay attention to target relations, and relation tokens (`[R]`) accumulate semantic information about the text.
 
-## 4. Matemáticas de Extracción (`math.go`)
+## 4. Representation Extraction (`ExtractFromText`)
 
-A partir de los embeddings de palabras, utilizamos **Gonum** para reproducir las matemáticas exactas de PyTorch sin dependencias pesadas de Machine Learning:
+The model returns a large tensor (`last_hidden_state`). We split it into two parts:
 
-### Extracción de Entidades
-1. **Construcción de Spans**: Tomamos ventanas deslizantes de hasta `max_span_len=12` palabras, concatenando el embedding de la palabra inicial y final de cada ventana.
-2. **Proyección (Feed Forward)**: Pasamos cada span por la red lineal de clasificación (cuyos pesos cargamos desde `gliner_classifiers.safetensors`).
-3. **NMS (Non-Maximum Suppression)**: Filtramos los spans superpuestos reteniendo sólo los de mayor puntuación (logit > 0.5).
+- **Relation Embeddings (`pc_embs`)**: We look for the positions of the `[R]` tokens within the prompt and extract their vectors (dimension 768). These vectors now mathematically represent the concepts of *source* (head) and *target* (tail) for each relation label.
+- **Word Embeddings**: Using our `text_word_indices` vector, we jump to the position of the first subword of each word in the tensor and extract its representation (Word Pooling).
 
-### Extracción de Relaciones
-1. Obtenemos las representaciones empíricas de cada entidad candidata.
-2. Proyectamos estas representaciones a un espacio semántico compartido mediante operaciones matriciales (`Bilinear` u operaciones de atención latentes).
-3. Hacemos el **Producto Punto** entre la representación de la entidad proyectada y los `pc_embs` extraídos del paso 3.
-4. Si la puntuación supera el umbral, confirmamos el par `(Head, Tail)` como una relación válida para esa clase.
+## 5. Extraction Mathematics (`pkg/math` and `layers.go`)
+
+From the word embeddings, we use the modular math engine to reproduce the exact PyTorch mathematics:
+
+### Entity Extraction
+1. **Span Construction**: We take sliding windows of up to `max_span_len=12` words, concatenating the embedding of the start and end word of each window.
+2. **Projection (Feed Forward)**: We pass each span through the classification linear network (whose weights are loaded from `gliner_classifiers.safetensors`).
+3. **NMS (Non-Maximum Suppression)**: We filter overlapping spans, retaining only those with the highest score (logit > 0.5).
+
+### Relation Extraction
+1. We obtain the empirical representations of each candidate entity.
+2. We project these representations into a shared semantic space using matrix operations.
+3. We perform the **Dot Product** between the representation of the projected entity and the `pc_embs` extracted in step 4.
+4. If the score exceeds the threshold, we confirm the `(Head, Tail)` pair as a valid relation for that class.

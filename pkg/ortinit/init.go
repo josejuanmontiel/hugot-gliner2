@@ -1,10 +1,9 @@
-package gliner
+package ortinit
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"github.com/yalue/onnxruntime_go"
 )
@@ -25,20 +24,12 @@ func SetupONNX() error {
 		return onnxruntime_go.InitializeEnvironment()
 	}
 
+	defaultLib := getDefaultLibName()
+
 	// 2. Strategy: Search relative to executable
 	ex, err := os.Executable()
 	if err == nil {
 		exPath := filepath.Dir(ex)
-		var defaultLib string
-		switch runtime.GOOS {
-		case "windows":
-			defaultLib = "onnxruntime.dll"
-		case "darwin":
-			defaultLib = "libonnxruntime.dylib"
-		default: // linux, freebsd, etc.
-			defaultLib = "libonnxruntime.so"
-		}
-
 		localLib := filepath.Join(exPath, defaultLib)
 		if _, err := os.Stat(localLib); err == nil {
 			onnxruntime_go.SetSharedLibraryPath(localLib)
@@ -47,15 +38,7 @@ func SetupONNX() error {
 	}
 
 	// 3. Last resort: Let the OS find it in standard paths
-	// We still need to set the name, especially for Windows/macOS where it's not always automatic
-	switch runtime.GOOS {
-	case "windows":
-		onnxruntime_go.SetSharedLibraryPath("onnxruntime.dll")
-	case "darwin":
-		onnxruntime_go.SetSharedLibraryPath("libonnxruntime.dylib")
-	default:
-		onnxruntime_go.SetSharedLibraryPath("libonnxruntime.so")
-	}
+	onnxruntime_go.SetSharedLibraryPath(defaultLib)
 
 	err = onnxruntime_go.InitializeEnvironment()
 	if err != nil {

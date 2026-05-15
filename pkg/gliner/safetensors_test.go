@@ -1,11 +1,16 @@
 package gliner
 
 import (
+	"os"
 	"testing"
 )
 
 func TestLoadSafetensors(t *testing.T) {
-	tensors, err := LoadSafetensors("gliner_classifiers.safetensors")
+	path := "../../gliner_classifiers.safetensors"
+	if _, err := os.Stat(path); err != nil {
+		t.Skip("Skipping safetensors test: file not found at", path)
+	}
+	tensors, err := LoadSafetensors(path)
 	if err != nil {
 		t.Fatalf("Failed to load safetensors: %v", err)
 	}

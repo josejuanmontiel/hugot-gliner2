@@ -7,36 +7,37 @@ import (
 	"testing"
 
 	"github.com/yalue/onnxruntime_go"
-	"gonum.org/v1/gonum/mat"
 
 	"hugot-gliner2/pkg/gliner"
+	"hugot-gliner2/pkg/math"
+	"hugot-gliner2/pkg/ortinit"
 )
 
-// TestE2EPipelineExample es un test de ejemplo para mostrar cómo se ensambla
-// el paso de ONNX Runtime y el paso matemático de Gonum en Go usando la API pública.
-// Nota: Este test asume que la librería compartida de onnxruntime está instalada en el sistema.
+// TestE2EPipelineExample is an example test showing how to assemble
+// the ONNX Runtime step and the modular math step in Go using the public API.
 func TestE2EPipelineExample(t *testing.T) {
-	// 1. Iniciar el entorno de ONNX
-	onnxruntime_go.SetSharedLibraryPath("/home/jose/openvino/openvino/lib/python3.13/site-packages/onnxruntime/capi/libonnxruntime.so.1.25.1")
-	err := onnxruntime_go.InitializeEnvironment()
+	// 1. Initialize ONNX environment
+	err := ortinit.SetupONNX()
 	if err != nil {
-		t.Skipf("Saltando test de ONNX porque no está configurada la librería C: %v", err)
+		t.Skipf("Skipping ONNX test because C library is not configured: %v", err)
 	}
 	defer onnxruntime_go.DestroyEnvironment()
 
-	// 2. Instanciar nuestro Pipeline
+	// 2. Instantiate our Pipeline
 	pipeline, err := gliner.NewPipeline(
 		"../encoder.onnx",
 		"../count_embed.onnx",
 		"../gliner_classifiers.safetensors",
+		"../tokenizer_out/tokenizer.json",
+		"../tests/testdata/prompt_ids.json",
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("No se pudo crear el pipeline: %v", err)
+		t.Fatalf("Failed to create pipeline: %v", err)
 	}
 	defer pipeline.Close()
 
-	// 3. Cargar la simulación del Tokenizador (hugot_sim.json)
+	// 3. Load Simulation Data (hugot_sim.json)
 	type HugotSim struct {
 		InputIds        []int64       `json:"input_ids"`
 		AttentionMask   []int64       `json:"attention_mask"`
@@ -48,7 +49,7 @@ func TestE2EPipelineExample(t *testing.T) {
 
 	b, err := os.ReadFile("testdata/hugot_sim.json")
 	if err != nil {
-		t.Fatalf("No se pudo leer hugot_sim.json: %v", err)
+		t.Fatalf("Could not read hugot_sim.json: %v", err)
 	}
 	var sim HugotSim
 	if err := json.Unmarshal(b, &sim); err != nil {
@@ -58,31 +59,30 @@ func TestE2EPipelineExample(t *testing.T) {
 	batchSize := int64(1)
 	seqLen := int64(len(sim.InputIds))
 
-	// 4. EJECUCIÓN ONNX ENCODER
+	// 4. ONNX ENCODER EXECUTION
 	hiddenStatesData, err := pipeline.RunEncoder(sim.InputIds, sim.AttentionMask, batchSize, seqLen)
 	if err != nil {
-		t.Fatalf("Fallo en la inferencia del encoder: %v", err)
+		t.Fatalf("Encoder inference failed: %v", err)
 	}
 
-	// 5. POOLING DE TOKENS A PALABRAS ("first" pooling)
+	// 5. TOKEN POOLING TO WORDS ("first" pooling)
 	numWords := len(sim.TextWordIndices)
-	wordF64 := make([]float64, numWords*768)
+	wordF32 := make([]float32, numWords*768)
 	for i, tokenIdx := range sim.TextWordIndices {
 		for d := 0; d < 768; d++ {
-			val := hiddenStatesData[tokenIdx*768+d]
-			wordF64[i*768+d] = float64(val)
+			wordF32[i*768+d] = hiddenStatesData[tokenIdx*768+d]
 		}
 	}
-	wordMat := mat.NewDense(numWords, 768, wordF64)
+	wordMat := &math.Tensor{Data: wordF32, Shape: []int{numWords, 768}}
 
-	// 6. EXTRACCIÓN DE ENTIDADES
+	// 6. ENTITY EXTRACTION
 	spanReps, spansInfo, scores := pipeline.ExtractEntities(wordMat, 12)
 	validIndices := gliner.NMS(spansInfo, scores, 0.999)
 
 	fmt.Printf("\n=======================================\n")
-	fmt.Printf("🏆 ¡INFERENCIA E2E GO-GLINER EXITOSA! 🏆\n")
+	fmt.Printf("🏆 SUCCESSFUL GO-GLINER E2E INFERENCE! 🏆\n")
 	fmt.Printf("=======================================\n")
-	fmt.Printf("Entidades candidatas de muy alta confianza encontradas:\n")
+	fmt.Printf("High-confidence candidate entities found:\n")
 
 	for _, idx := range validIndices {
 		span := spansInfo[idx]
@@ -108,8 +108,8 @@ func TestE2EPipelineExample(t *testing.T) {
 		}
 	}
 
-	// 7. EXTRACCIÓN DE RELACIONES
-	fmt.Printf("\nEvaluando Relaciones...\n")
+	// 7. RELATION EXTRACTION
+	fmt.Printf("\nEvaluating Relations...\n")
 
 	getText := func(spanIdx int) string {
 		span := spansInfo[spanIdx]
@@ -133,16 +133,17 @@ func TestE2EPipelineExample(t *testing.T) {
 		}
 		numFields := int64(len(pcEmb))
 
-		relations, err := pipeline.ExtractRelations(spanReps, spansInfo, pcEmbFlat, numFields)
+		// validIndices can be nil to extract relations for all possible spans
+		relations, err := pipeline.ExtractRelations(spanReps, spansInfo, nil, pcEmbFlat, numFields)
 		if err != nil {
-			t.Fatalf("Fallo en inferencia de relations: %v", err)
+			t.Fatalf("Relation inference failed: %v", err)
 		}
 
 		for _, rel := range relations {
 			headTxt := getText(rel.Head.Index)
 			tailTxt := getText(rel.Tail.Index)
 
-			fmt.Printf(" 🤝 [%s] ---> %s ---> [%s] (Confianza: H=%.4f, T=%.4f)\n",
+			fmt.Printf(" 🤝 [%s] ---> %s ---> [%s] (Confidence: H=%.4f, T=%.4f)\n",
 				headTxt, label, tailTxt, rel.Head.Score, rel.Tail.Score)
 		}
 	}
