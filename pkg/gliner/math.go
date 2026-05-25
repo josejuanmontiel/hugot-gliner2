@@ -70,27 +70,46 @@ func (p *Pipeline) ClassifyEntities(spanReps *math.Tensor) []float64 {
 
 // NMS (Non-Maximum Suppression) filters overlapping spans keeping the highest score.
 func NMS(spans [][2]int, scores []float64, threshold float64) []int {
-	var valid []int
-	for i, score := range scores {
-		if score < threshold {
-			continue
-		}
+	type candidate struct {
+		index int
+		score float64
+	}
 
-		// Check overlap with already accepted spans
+	var candidates []candidate
+	for i, score := range scores {
+		if score >= threshold {
+			candidates = append(candidates, candidate{index: i, score: score})
+		}
+	}
+
+	// Sort descending by score
+	for i := 0; i < len(candidates); i++ {
+		for j := i + 1; j < len(candidates); j++ {
+			if candidates[j].score > candidates[i].score {
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			}
+		}
+	}
+
+	var valid []int
+	for _, cand := range candidates {
 		overlap := false
+		cSpan := spans[cand.index]
+		
 		for _, vIdx := range valid {
 			vSpan := spans[vIdx]
-			cSpan := spans[i]
 			// Overlap condition: c.start <= v.end AND c.end >= v.start
 			if cSpan[0] <= vSpan[1] && cSpan[1] >= vSpan[0] {
 				overlap = true
 				break
 			}
 		}
+		
 		if !overlap {
-			valid = append(valid, i)
+			valid = append(valid, cand.index)
 		}
 	}
+	
 	return valid
 }
 

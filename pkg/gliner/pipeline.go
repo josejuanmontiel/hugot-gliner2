@@ -144,7 +144,12 @@ func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, v
 	pcTensor, _ := onnxruntime_go.NewTensor(onnxruntime_go.Shape{numFields, int64(hiddenSize)}, pcEmb)
 	defer pcTensor.Destroy()
 
-	outputTensor, _ := onnxruntime_go.NewEmptyTensor[float32](onnxruntime_go.Shape{numFields, 2, int64(hiddenSize)})
+	// maxCount represents the fixed maximum number of relations exported in the ONNX model.
+	// The Python script (export_gliner.py) hardcodes this dimension to 20 during the ONNX export.
+	// Therefore, the output tensor 'struct_proj' will always have a first dimension of 20.
+	// numFields represents the second dimension (e.g., 2 for Head and Tail).
+	const maxCount = 20
+	outputTensor, _ := onnxruntime_go.NewEmptyTensor[float32](onnxruntime_go.Shape{maxCount, numFields, int64(hiddenSize)})
 	defer outputTensor.Destroy()
 
 	err := p.countSession.Run([]onnxruntime_go.Value{pcTensor}, []onnxruntime_go.Value{outputTensor})
@@ -153,8 +158,7 @@ func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, v
 	}
 	
 	structProj := outputTensor.GetData()
-	maxCount := int(numFields)
-	relations := ExtractRelations(spanReps, spansInfo, validIndices, structProj, maxCount, 2, hiddenSize)
+	relations := ExtractRelations(spanReps, spansInfo, validIndices, structProj, maxCount, int(numFields), hiddenSize)
 	return relations, nil
 }
 

@@ -57,7 +57,10 @@ def main():
             self.count_embed = count_embed
             
         def forward(self, pc_emb):
-            # Hardcode gold_count_val to max_count (20) for ONNX static export
+            # Hardcode gold_count_val to max_count (20) for ONNX static export.
+            # This forces the output tensor's first dimension to always be 20.
+            # Therefore, the Go implementation MUST allocate the output tensor as:
+            # [20, num_fields, hidden_size] where num_fields is typically 2 (Head and Tail)
             return self.count_embed(pc_emb, self.count_embed.max_count)
 
     count_embed_wrapper = CountEmbedWrapper(torch_model.count_embed)

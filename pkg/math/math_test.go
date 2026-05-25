@@ -64,3 +64,13 @@ func TestSigmoid(t *testing.T) {
 		t.Errorf("Expected 0.5, got %f", x.Data[0])
 	}
 }
+
+func TestDot(t *testing.T) {
+	a := []float32{1.0, 2.0, 3.0}
+	b := []float32{4.0, 5.0, 6.0}
+	// Dot(A, B) = 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
+	result := Dot(a, b)
+	if math.Abs(float64(result-32.0)) > 1e-5 {
+		t.Errorf("Expected Dot product 32.0, got %f", result)
+	}
+}

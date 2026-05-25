@@ -45,5 +45,8 @@ From the word embeddings, we use the modular math engine to reproduce the exact 
 ### Relation Extraction
 1. We obtain the empirical representations of each candidate entity.
 2. We project these representations into a shared semantic space using matrix operations.
-3. We perform the **Dot Product** between the representation of the projected entity and the `pc_embs` extracted in step 4.
+3. We pass the relation tokens (`pc_embs`) through the `count_embed` ONNX module.
+   - **Note on ONNX Dimensions**: The `count_embed.onnx` model was exported from PyTorch with a hardcoded `max_count` of `20`. This means the output tensor `struct_proj` **always** has a fixed first dimension of 20 (`[20, num_fields, hidden_size]`). 
+   - `num_fields` is typically `2`, representing the two components of a relation (Head and Tail). The Go code explicitly accommodates this fixed `[20, 2, 768]` shape during inference.
+4. We perform the **Dot Product** between the representation of the projected entity and the `pc_embs` extracted in step 4.
 4. If the score exceeds the threshold, we confirm the `(Head, Tail)` pair as a valid relation for that class.

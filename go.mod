@@ -8,6 +8,8 @@ require (
 	github.com/daulet/tokenizers v1.23.0
 	github.com/yalue/onnxruntime_go v1.24.0
 	gonum.org/v1/gonum v0.17.0
+	gorgonia.org/gorgonia v0.9.18
+	gorgonia.org/tensor v0.9.24
 )
 
 require (
@@ -27,8 +29,6 @@ require (
 	google.golang.org/protobuf v1.28.0 // indirect
 	gorgonia.org/cu v0.9.4 // indirect
 	gorgonia.org/dawson v1.2.0 // indirect
-	gorgonia.org/gorgonia v0.9.18 // indirect
-	gorgonia.org/tensor v0.9.24 // indirect
 	gorgonia.org/vecf32 v0.9.0 // indirect
 	gorgonia.org/vecf64 v0.9.0 // indirect
 )
