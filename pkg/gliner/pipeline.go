@@ -156,7 +156,7 @@ func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, v
 	if err != nil {
 		return nil, err
 	}
-	
+
 	structProj := outputTensor.GetData()
 	relations := ExtractRelations(spanReps, spansInfo, validIndices, structProj, maxCount, int(numFields), hiddenSize)
 	return relations, nil
@@ -165,7 +165,7 @@ func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, v
 // ExtractFromText provides an E2E high-level API.
 func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.RelationResult, []string, [][2]int, error) {
 	idsArr, wordIndices, words := TokenizeAndPool(p.tk, text)
-	
+
 	fullInputIDs := append(p.promptIDs, idsArr...)
 	fullAttentionMask := make([]int64, len(fullInputIDs))
 	for i := range fullAttentionMask {
@@ -174,7 +174,7 @@ func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.Rela
 
 	batchSize := int64(1)
 	seqLen := int64(len(fullInputIDs))
-	
+
 	hiddenStatesData, err := p.RunEncoder(fullInputIDs, fullAttentionMask, batchSize, seqLen)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -182,7 +182,7 @@ func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.Rela
 
 	promptLen := len(p.promptIDs)
 	hiddenSize := 768
-	
+
 	// Pool
 	wordF32 := make([]float32, len(words)*hiddenSize)
 	for i, tokenIdx := range wordIndices {
@@ -210,10 +210,10 @@ func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.Rela
 	if numRelations > 0 {
 		pcEmb := make([]float32, numRelations*int64(hiddenSize))
 		// Map back to the [R] tokens in the prompt (usually one per label)
-		// For demo simplicity, we take the first few tokens. 
+		// For demo simplicity, we take the first few tokens.
 		// In production, this would be mapped via the prompt_ids logic.
 		copy(pcEmb, hiddenStatesData[0:numRelations*int64(hiddenSize)])
-		
+
 		relations, err := p.ExtractRelations(spanReps, spansInfo, validIndices, pcEmb, numRelations)
 		if err == nil {
 			for i := range relations {

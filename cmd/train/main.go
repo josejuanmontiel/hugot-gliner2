@@ -58,7 +58,7 @@ func main() {
 	l1_act := gorgonia.Must(gorgonia.Rectify(l1))
 	pred := gorgonia.Must(gorgonia.Add(gorgonia.Must(gorgonia.Mul(l1_act, gorgonia.Must(gorgonia.Transpose(w2)))), b2))
 	prob := gorgonia.Must(gorgonia.Sigmoid(pred))
-	
+
 	loss := gorgonia.Must(gorgonia.Mean(gorgonia.Must(gorgonia.Square(gorgonia.Must(gorgonia.Sub(prob, y))))))
 	gorgonia.Grad(loss, w1, b1, w2, b2)
 
@@ -67,7 +67,7 @@ func main() {
 	defer vm.Close()
 
 	fmt.Println("\n🧠 Starting Real Fine-Tuning (Single Class Symptom)...")
-	
+
 	for epoch := 0; epoch < 10; epoch++ {
 		totalLoss := float64(0)
 		count := 0
@@ -75,8 +75,10 @@ func main() {
 			idsArr, wordIndices, words := gliner.TokenizeAndPool(pipeline.GetTokenizer(), sample.Text)
 			fullInputIDs := append(pipeline.GetPromptIDs(), idsArr...)
 			fullAttentionMask := make([]int64, len(fullInputIDs))
-			for i := range fullAttentionMask { fullAttentionMask[i] = 1 }
-			
+			for i := range fullAttentionMask {
+				fullAttentionMask[i] = 1
+			}
+
 			hiddenStates, err := pipeline.RunEncoder(fullInputIDs, fullAttentionMask, 1, int64(len(fullInputIDs)))
 			if err != nil {
 				log.Fatalf("Encoder failed: %v", err)
@@ -93,12 +95,14 @@ func main() {
 				}
 
 				targetVal := []float32{0.0}
-				if isSymptom { targetVal = []float32{1.0} }
+				if isSymptom {
+					targetVal = []float32{1.0}
+				}
 
 				tokenIdx := wordIndices[i]
 				offsetStart := (promptLen + tokenIdx) * 768
 				offsetEnd := (promptLen + tokenIdx + 1) * 768
-				
+
 				if offsetEnd > len(hiddenStates) {
 					continue
 				}
