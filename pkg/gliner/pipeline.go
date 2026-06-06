@@ -27,26 +27,26 @@ type Pipeline struct {
 }
 
 // NewPipeline creates a pipeline using the standard GLiNER2 architecture.
-func NewPipeline(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, labels []string) (*Pipeline, error) {
-	return NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath, labels, &GLiNER2Architecture{})
+func NewPipeline(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, labels []string, options *onnxruntime_go.SessionOptions) (*Pipeline, error) {
+	return NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath, labels, &GLiNER2Architecture{}, options)
 }
 
 // NewPipelineWithArch creates a pipeline using a specific head architecture strategy.
-func NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, labels []string, arch HeadArchitecture) (*Pipeline, error) {
+func NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, labels []string, arch HeadArchitecture, options *onnxruntime_go.SessionOptions) (*Pipeline, error) {
 	tk, err := tokenizers.FromFile(tokenizerPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer: %w", err)
 	}
 
 	encoderSession, err := onnxruntime_go.NewDynamicAdvancedSession(encoderPath,
-		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, nil)
+		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, options)
 	if err != nil {
 		tk.Close()
 		return nil, fmt.Errorf("failed to create encoder session: %w", err)
 	}
 
 	countSession, err := onnxruntime_go.NewDynamicAdvancedSession(countPath,
-		[]string{"pc_emb"}, []string{"struct_proj"}, nil)
+		[]string{"pc_emb"}, []string{"struct_proj"}, options)
 	if err != nil {
 		tk.Close()
 		encoderSession.Destroy()

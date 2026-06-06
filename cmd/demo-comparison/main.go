@@ -42,6 +42,7 @@ func main() {
 		findFile("tokenizer_out/tokenizer.json"),
 		findFile("tests/testdata/prompt_ids.json"),
 		labels,
+		nil,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create standard pipeline: %v", err)
@@ -57,6 +58,7 @@ func main() {
 		findFile("tests/testdata/prompt_ids.json"),
 		labels,
 		&gliner.MedicalArchitecture{WeightsPath: findFile("medical_head.safetensors")},
+		nil,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create Medical Expert pipeline: %v", err)

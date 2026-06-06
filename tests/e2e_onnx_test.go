@@ -31,6 +31,7 @@ func TestE2EPipelineExample(t *testing.T) {
 		"../tokenizer_out/tokenizer.json",
 		"../tests/testdata/prompt_ids.json",
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("Failed to create pipeline: %v", err)

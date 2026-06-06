@@ -28,6 +28,7 @@ func main() {
 		"tokenizer_out/tokenizer.json",
 		"tests/testdata/prompt_ids.json",
 		nil,
+		nil,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create pipeline: %v", err)

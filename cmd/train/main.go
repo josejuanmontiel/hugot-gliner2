@@ -32,7 +32,7 @@ func main() {
 
 	pipeline, err := gliner.NewPipeline(
 		"encoder.onnx", "count_embed.onnx", "gliner_classifiers.safetensors",
-		"tokenizer_out/tokenizer.json", "tests/testdata/prompt_ids.json", nil,
+		"tokenizer_out/tokenizer.json", "tests/testdata/prompt_ids.json", nil, nil,
 	)
 	if err != nil {
 		log.Fatalf("Failed to load pipeline: %v", err)
