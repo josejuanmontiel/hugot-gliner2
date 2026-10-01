@@ -11,6 +11,8 @@ type Heads struct {
 	SpanProjectEnd   Module
 	SpanOutProject   Module
 	EntityClassifier Module
+	Classification   Module
+	CountPredictor   Module
 }
 
 // HeadArchitecture defines the strategy to assemble heads from a map of tensors.
@@ -32,10 +34,26 @@ func (a *GLiNER2Architecture) Assemble(tensors map[string]*math.Tensor) (*Heads,
 		}
 		return t, nil
 	}
+	for _, name := range []string{
+		"span_rep.span_rep_layer.project_start.0.weight", "span_rep.span_rep_layer.project_start.0.bias",
+		"span_rep.span_rep_layer.project_start.3.weight", "span_rep.span_rep_layer.project_start.3.bias",
+		"span_rep.span_rep_layer.project_end.0.weight", "span_rep.span_rep_layer.project_end.0.bias",
+		"span_rep.span_rep_layer.project_end.3.weight", "span_rep.span_rep_layer.project_end.3.bias",
+		"span_rep.span_rep_layer.out_project.0.weight", "span_rep.span_rep_layer.out_project.0.bias",
+		"span_rep.span_rep_layer.out_project.3.weight", "span_rep.span_rep_layer.out_project.3.bias",
+		"classifier.0.weight", "classifier.0.bias", "classifier.2.weight", "classifier.2.bias",
+		"count_pred.0.weight", "count_pred.0.bias", "count_pred.2.weight", "count_pred.2.bias",
+	} {
+		if _, err := get(name); err != nil {
+			return nil, err
+		}
+	}
 
 	// 1. Span Project Start: Linear -> ReLU -> Linear
 	sw0, err := get("span_rep.span_rep_layer.project_start.0.weight")
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	sb0, _ := get("span_rep.span_rep_layer.project_start.0.bias")
 	sw3, _ := get("span_rep.span_rep_layer.project_start.3.weight")
 	sb3, _ := get("span_rep.span_rep_layer.project_start.3.bias")
@@ -90,6 +108,30 @@ func (a *GLiNER2Architecture) Assemble(tensors map[string]*math.Tensor) (*Heads,
 			ActivationLayer{Fn: math.Sigmoid},
 		},
 	}
+
+	// The same classifier without the final sigmoid is used by classification
+	// tasks, which choose softmax or sigmoid based on the schema.
+	h.Classification = &SequentialModule{
+		Modules: []Module{
+			LinearLayer{Weight: cw0, Bias: cb0},
+			ActivationLayer{Fn: math.ReLU},
+			LinearLayer{Weight: cw2, Bias: cb2},
+		},
+	}
+
+	// Count prediction selects the number of structure/relation instances.
+	countW0, err := get("count_pred.0.weight")
+	if err != nil {
+		return nil, err
+	}
+	countB0, _ := get("count_pred.0.bias")
+	countW2, _ := get("count_pred.2.weight")
+	countB2, _ := get("count_pred.2.bias")
+	h.CountPredictor = &SequentialModule{Modules: []Module{
+		LinearLayer{Weight: countW0, Bias: countB0},
+		ActivationLayer{Fn: math.ReLU},
+		LinearLayer{Weight: countW2, Bias: countB2},
+	}}
 
 	return h, nil
 }

@@ -96,6 +96,22 @@ def main():
     for key, value in state_dict.items():
         if not key.startswith("encoder.") and not key.startswith("count_embed."):
             classifier_state_dict[key] = value
+
+    required_tensors = {
+        "classifier.0.weight", "classifier.0.bias",
+        "classifier.2.weight", "classifier.2.bias",
+        "count_pred.0.weight", "count_pred.0.bias",
+        "count_pred.2.weight", "count_pred.2.bias",
+        "span_rep.span_rep_layer.project_start.0.weight",
+        "span_rep.span_rep_layer.project_start.3.weight",
+        "span_rep.span_rep_layer.project_end.0.weight",
+        "span_rep.span_rep_layer.project_end.3.weight",
+        "span_rep.span_rep_layer.out_project.0.weight",
+        "span_rep.span_rep_layer.out_project.3.weight",
+    }
+    missing = sorted(required_tensors - classifier_state_dict.keys())
+    if missing:
+        raise RuntimeError(f"Export is missing runtime tensors: {missing}")
             
     print(f"Found {len(classifier_state_dict)} tensors for classifiers/span rep.")
     save_file(classifier_state_dict, "gliner_classifiers.safetensors")

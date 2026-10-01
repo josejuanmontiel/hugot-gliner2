@@ -1,9 +1,11 @@
 package gliner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 
 	"hugot-gliner2/pkg/math"
 	"hugot-gliner2/pkg/types"
@@ -24,6 +26,9 @@ type Pipeline struct {
 	tk           *tokenizers.Tokenizer
 	promptIDs    []int64
 	promptLabels []string
+	mu           sync.Mutex
+	readyErr     error
+	provider     string
 }
 
 // NewPipeline creates a pipeline using the standard GLiNER2 architecture.
@@ -33,32 +38,45 @@ func NewPipeline(encoderPath, countPath, safetensorsPath, tokenizerPath, promptP
 
 // NewPipelineWithArch creates a pipeline using a specific head architecture strategy.
 func NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, labels []string, arch HeadArchitecture) (*Pipeline, error) {
+	return newPipeline(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath, arch, nil)
+}
+
+// NewDynamicPipeline loads a pipeline whose schema is supplied for every
+// inference request instead of through a pre-tokenized prompt file.
+func NewDynamicPipeline(encoderPath, countPath, safetensorsPath, tokenizerPath string) (*Pipeline, error) {
+	return NewDynamicPipelineWithOptions(encoderPath, countPath, safetensorsPath, tokenizerPath, PipelineOptions{Provider: ExecutionProviderCPU})
+}
+
+func newPipeline(encoderPath, countPath, safetensorsPath, tokenizerPath, promptPath string, arch HeadArchitecture, sessionOptions *onnxruntime_go.SessionOptions) (*Pipeline, error) {
 	tk, err := tokenizers.FromFile(tokenizerPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tokenizer: %w", err)
 	}
 
 	encoderSession, err := onnxruntime_go.NewDynamicAdvancedSession(encoderPath,
-		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, nil)
+		[]string{"input_ids", "attention_mask"}, []string{"last_hidden_state"}, sessionOptions)
 	if err != nil {
 		tk.Close()
 		return nil, fmt.Errorf("failed to create encoder session: %w", err)
 	}
 
 	countSession, err := onnxruntime_go.NewDynamicAdvancedSession(countPath,
-		[]string{"pc_emb"}, []string{"struct_proj"}, nil)
+		[]string{"pc_emb"}, []string{"struct_proj"}, sessionOptions)
 	if err != nil {
 		tk.Close()
 		encoderSession.Destroy()
 		return nil, fmt.Errorf("failed to create count session: %w", err)
 	}
 
-	promptData, err := LoadPromptData(promptPath)
-	if err != nil {
-		tk.Close()
-		encoderSession.Destroy()
-		countSession.Destroy()
-		return nil, fmt.Errorf("failed to load prompt data: %w", err)
+	promptData := &PromptData{}
+	if promptPath != "" {
+		promptData, err = LoadPromptData(promptPath)
+		if err != nil {
+			tk.Close()
+			encoderSession.Destroy()
+			countSession.Destroy()
+			return nil, fmt.Errorf("failed to load prompt data: %w", err)
+		}
 	}
 
 	rawTensors, err := LoadSafetensors(safetensorsPath)
@@ -85,9 +103,37 @@ func NewPipelineWithArch(encoderPath, countPath, safetensorsPath, tokenizerPath,
 		tk:             tk,
 		promptIDs:      promptData.PromptIDs,
 		promptLabels:   promptData.Labels,
+		provider:       string(ExecutionProviderCPU),
+	}
+	if promptPath == "" {
+		if err := p.validateDynamicTokenizer(); err != nil {
+			p.Close()
+			return nil, err
+		}
 	}
 
 	return p, nil
+}
+
+func (p *Pipeline) Ready() error { return p.readyErr }
+
+// ExecutionProvider reports the backend selected when the ONNX sessions were
+// created. It is exposed through the readiness endpoint when available.
+func (p *Pipeline) ExecutionProvider() string { return p.provider }
+
+var _ Engine = (*Pipeline)(nil)
+
+// Infer serializes access to the ONNX sessions until a session-pool is
+// configured by a future implementation.
+func (p *Pipeline) Infer(ctx context.Context, text string, schema Schema, options InferOptions) (ExtractionResult, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ExtractionResult{}, ctx.Err()
+	default:
+	}
+	return p.inferDynamic(ctx, text, schema, options)
 }
 
 // GetTokenizer returns the internal tokenizer.
@@ -156,7 +202,7 @@ func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, v
 	if err != nil {
 		return nil, err
 	}
-	
+
 	structProj := outputTensor.GetData()
 	relations := ExtractRelations(spanReps, spansInfo, validIndices, structProj, maxCount, int(numFields), hiddenSize)
 	return relations, nil
@@ -165,7 +211,7 @@ func (p *Pipeline) ExtractRelations(spanReps *math.Tensor, spansInfo [][2]int, v
 // ExtractFromText provides an E2E high-level API.
 func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.RelationResult, []string, [][2]int, error) {
 	idsArr, wordIndices, words := TokenizeAndPool(p.tk, text)
-	
+
 	fullInputIDs := append(p.promptIDs, idsArr...)
 	fullAttentionMask := make([]int64, len(fullInputIDs))
 	for i := range fullAttentionMask {
@@ -174,7 +220,7 @@ func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.Rela
 
 	batchSize := int64(1)
 	seqLen := int64(len(fullInputIDs))
-	
+
 	hiddenStatesData, err := p.RunEncoder(fullInputIDs, fullAttentionMask, batchSize, seqLen)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -182,7 +228,7 @@ func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.Rela
 
 	promptLen := len(p.promptIDs)
 	hiddenSize := 768
-	
+
 	// Pool
 	wordF32 := make([]float32, len(words)*hiddenSize)
 	for i, tokenIdx := range wordIndices {
@@ -210,10 +256,10 @@ func (p *Pipeline) ExtractFromText(text string) ([]types.SpanMatch, []types.Rela
 	if numRelations > 0 {
 		pcEmb := make([]float32, numRelations*int64(hiddenSize))
 		// Map back to the [R] tokens in the prompt (usually one per label)
-		// For demo simplicity, we take the first few tokens. 
+		// For demo simplicity, we take the first few tokens.
 		// In production, this would be mapped via the prompt_ids logic.
 		copy(pcEmb, hiddenStatesData[0:numRelations*int64(hiddenSize)])
-		
+
 		relations, err := p.ExtractRelations(spanReps, spansInfo, validIndices, pcEmb, numRelations)
 		if err == nil {
 			for i := range relations {

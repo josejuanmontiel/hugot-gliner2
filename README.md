@@ -110,9 +110,120 @@ pipeline, err := gliner.NewPipeline(
 )
 defer pipeline.Close()
 
-// 2. Extract directly from text
+// 3. Extract directly from text
 entities, relations, words, spansInfo, err := pipeline.ExtractFromText("Lukas Virtanen founded Nordic AI.")
 ```
+
+## Fastino-compatible Fiber API
+
+The repository includes a reusable Fiber application in `pkg/server` and a
+runnable server in `cmd/api`. It implements the documented GLiNER form of
+`POST /v1/chat/completions` for entity extraction, classification, structured
+records, relations, and combined schemas. The extraction result is returned as
+a JSON string in `choices[0].message.content`.
+
+### Build prerequisites
+
+In addition to ONNX Runtime, `github.com/daulet/tokenizers` requires its native
+`libtokenizers` archive. Download the archive matching the version in `go.mod`
+and your platform from the
+[tokenizers releases](https://github.com/daulet/tokenizers/releases), then make
+its directory visible to the external linker:
+
+```bash
+export CGO_LDFLAGS="-L/absolute/path/to/libtokenizers"
+./download_models.sh
+go build -o gliner-api ./cmd/api
+```
+
+`download_models.sh` writes assets atomically and verifies their SHA-256
+checksums before replacing local files.
+
+### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ADDR` | `:8080` | Listen address |
+| `MODEL_ID` | `fastino/gliner2-base-v1` | Required request model ID |
+| `API_KEY` | empty | Optional Bearer or `X-API-Key` authentication |
+| `ONNXRUNTIME_LIB_PATH` | platform lookup | ONNX Runtime shared library |
+| `ENCODER_PATH` | `encoder.onnx` | Encoder model |
+| `COUNT_EMBED_PATH` | `count_embed.onnx` | Count embedding model |
+| `CLASSIFIERS_PATH` | `gliner_classifiers.safetensors` | Span/classification heads |
+| `TOKENIZER_PATH` | `tokenizer_out/tokenizer.json` | Tokenizer configuration |
+| `MAX_BODY_BYTES` | `2097152` | Maximum HTTP request size |
+| `MAX_TEXT_BYTES` | `262144` | Maximum analyzed text size |
+| `INFERENCE_TIMEOUT` | `5m` | Per-request timeout |
+| `INFERENCE_QUEUE_DEPTH` | `16` | Maximum admitted in-flight/queued requests |
+| `INFERENCE_PROVIDER` | `auto` | `auto`, `cpu`, or Apple-accelerated `coreml` |
+| `COREML_COMPUTE_UNITS` | `CPUAndGPU` | `CPUAndGPU`, `CPUAndNeuralEngine`, `ALL`, or `CPUOnly` |
+| `COREML_MODEL_FORMAT` | `NeuralNetwork` | Core ML `NeuralNetwork` or `MLProgram` graph format |
+| `COREML_CACHE_DIR` | empty | Optional compiled Core ML model cache directory |
+| `COREML_PROFILE` | `false` | Log the Core ML hardware compute plan |
+| `COREML_LOW_PRECISION` | `false` | Allow low-precision GPU accumulation |
+
+Start the server:
+
+```bash
+./gliner-api
+```
+
+On Apple silicon, `INFERENCE_PROVIDER=auto` attempts ONNX Runtime's Core ML
+execution provider and safely falls back to CPU if it is unavailable. To
+require Metal-capable GPU execution and fail startup when Core ML is missing:
+
+```bash
+INFERENCE_PROVIDER=coreml \
+COREML_COMPUTE_UNITS=CPUAndGPU \
+COREML_CACHE_DIR="$PWD/.coreml-cache" \
+./gliner-api
+```
+
+The ONNX Runtime shared library must be built with Core ML support. This is the
+native Apple acceleration path for the Go ONNX pipeline. MLX itself does not
+load ONNX graphs and has no maintained Go binding, so this backend does not
+introduce a Python MLX subprocess. `GET /readyz` reports the selected execution
+provider.
+
+Call it with a Fastino-compatible request:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "fastino/gliner2-base-v1",
+    "messages": [{"role": "user", "content": "Ada Lovelace worked with Charles Babbage."}],
+    "schema": {
+      "entities": [
+        {"name": "person", "description": "a named individual"}
+      ],
+      "relations": ["worked_with"]
+    },
+    "threshold": 0.5,
+    "include_confidence": true,
+    "include_spans": true,
+    "store": false
+  }'
+```
+
+`GET /healthz` reports process liveness and `GET /readyz` confirms that the
+model is loaded. Authentication is disabled when `API_KEY` is empty. Streaming,
+batch text arrays, inference persistence/history, GLiDE/SystemOne, training,
+and GLiNER2.5-only record modes are intentionally not implemented. A request
+with `stream: true` receives an OpenAI-style `400` response.
+
+Dynamic schemas are bounded to 64 tasks and 256 total fields/labels so that
+oversized prompts are rejected before model inference.
+
+Interactive Swagger documentation is available at
+`http://localhost:8080/swagger/`. The embedded OpenAPI 3.0 document is exposed
+at `http://localhost:8080/openapi.json` for client generation and tooling.
+
+### Reusing the library
+
+Implement `gliner.Engine` to provide another backend, or pass a
+`*gliner.Pipeline` to `server.New`. The server depends only on the interface,
+which keeps HTTP contract tests independent from large model assets.
 
 ## Manual Model Export (Python to Go)
 

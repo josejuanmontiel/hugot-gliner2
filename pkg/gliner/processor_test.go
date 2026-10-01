@@ -15,7 +15,7 @@ func TestTokenizeAndPool(t *testing.T) {
 	defer tk.Close()
 
 	text := "Hello, world! This is a test."
-	
+
 	ids, wordIndices, words := TokenizeAndPool(tk, text)
 
 	// "Hello", ",", "world", "!", "This", "is", "a", "test", "."
@@ -46,5 +46,24 @@ func TestTokenizeAndPool(t *testing.T) {
 		if wordIndices[i] <= wordIndices[i-1] {
 			t.Errorf("Word indices should be strictly monotonically increasing, got %d then %d", wordIndices[i-1], wordIndices[i])
 		}
+	}
+}
+
+func TestTokenizeWithOffsetsUnicodeAndWhitespace(t *testing.T) {
+	tk, err := tokenizers.FromFile("../../tokenizer_out/tokenizer.json")
+	if err != nil {
+		t.Skipf("Skipping tokenizer test, tokenizer.json not found: %v", err)
+	}
+	defer tk.Close()
+
+	text := "Café  東京, India"
+	_, _, words := TokenizeWithOffsets(tk, text)
+	for _, word := range words {
+		if got := text[word.Start:word.End]; got != word.Text {
+			t.Fatalf("offsets [%d:%d] produced %q, want %q", word.Start, word.End, got, word.Text)
+		}
+	}
+	if words[0].Start != 0 || words[0].End != len("Café") {
+		t.Fatalf("unexpected UTF-8 offsets: %#v", words[0])
 	}
 }
