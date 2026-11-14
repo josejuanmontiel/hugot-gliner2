@@ -92,26 +92,34 @@ The `/scripts/export` directory contains the "source of truth" for the Go implem
 
 ```go
 import (
+	"fmt"
+
 	"hugot-gliner2/pkg/gliner"
 	"hugot-gliner2/pkg/ortinit"
 )
 
-// 1. Initialize ONNX Runtime (robust platform search)
-ortinit.SetupONNX()
+// 1. Initialize ONNX Runtime (checks ONNXRUNTIME_LIB_PATH, executable dir, and OpenVINO/system paths)
+_ = ortinit.SetupONNX()
 
-// 2. Initialize Pipeline
+// 2. Initialize Pipeline (pass nil for labels to use prompt_ids.json, or a custom []string slice of relation labels)
+customLabels := []string{"trabaja en", "fundó", "adquirió", "ubicado en"}
 pipeline, err := gliner.NewPipeline(
 	"encoder.onnx",
 	"count_embed.onnx",
 	"gliner_classifiers.safetensors",
 	"tokenizer_out/tokenizer.json",
 	"tests/testdata/prompt_ids.json",
-	nil, // Custom labels (optional)
+	customLabels, // nil uses prompt_ids.json; non-empty builds prompt dynamically
+	nil,          // optional *onnxruntime_go.SessionOptions
 )
 defer pipeline.Close()
 
-// 2. Extract directly from text
-entities, relations, words, spansInfo, err := pipeline.ExtractFromText("Lukas Virtanen founded Nordic AI.")
+// 3. Extract entities and directed relations from text
+entities, relations, _, _, err := pipeline.ExtractFromText("Lukas Virtanen founded Nordic AI in Helsinki.")
+for _, rel := range relations {
+	fmt.Printf("[%s] --- %s ---> [%s] (H=%.2f, T=%.2f)\n",
+		rel.Head.Text, rel.Label, rel.Tail.Text, rel.Head.Score, rel.Tail.Score)
+}
 ```
 
 ## Manual Model Export (Python to Go)
