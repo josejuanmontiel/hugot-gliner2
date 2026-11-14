@@ -41,7 +41,7 @@ func main() {
 	fmt.Printf("\n📄 Processing original text:\n%s\n\n", text)
 
 	// 4. Extract entities and relations
-	entities, relations, words, _, err := pipeline.ExtractFromText(text)
+	entities, relations, _, _, err := pipeline.ExtractFromText(text)
 	if err != nil {
 		log.Fatalf("Extraction failed: %v", err)
 	}
@@ -49,22 +49,13 @@ func main() {
 	// 5. Display results
 	fmt.Println("🏷️ Extracted Entities:")
 	for _, entity := range entities {
-		if entity.Index < len(words) {
-			fmt.Printf("   🔹 %s (score: %.4f)\n", words[entity.Index], entity.Score)
-		}
+		fmt.Printf("   🔹 %s (score: %.4f)\n", entity.Text, entity.Score)
 	}
 
 	fmt.Println("\n🤝 Extracted Relations:")
 	for _, rel := range relations {
-		headWord := "unknown"
-		tailWord := "unknown"
-		if rel.Head.Index < len(words) {
-			headWord = words[rel.Head.Index]
-		}
-		if rel.Tail.Index < len(words) {
-			tailWord = words[rel.Tail.Index]
-		}
-		fmt.Printf("   🔗 [%s] --- %s ---> [%s]\n", headWord, rel.Label, tailWord)
+		fmt.Printf("   🔗 [%s] --- %s ---> [%s] (H=%.2f, T=%.2f)\n",
+			rel.Head.Text, rel.Label, rel.Tail.Text, rel.Head.Score, rel.Tail.Score)
 	}
 
 	fmt.Println("\n✅ Demo Finished.")

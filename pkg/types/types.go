@@ -1,10 +1,11 @@
 package types
 
-// SpanMatch represents an extracted span index and its confidence score.
+// SpanMatch represents an extracted span index, text, and its confidence score.
 type SpanMatch struct {
 	Index int
 	Score float64
 	Label string
+	Text  string
 }
 
 // RelationResult represents an extracted relation mathematically.

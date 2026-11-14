@@ -48,3 +48,37 @@ func TestTokenizeAndPool(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildRelationPromptIDsAndFormat(t *testing.T) {
+	tk, err := tokenizers.FromFile("../../tokenizer_out/tokenizer.json")
+	if err != nil {
+		t.Skipf("Skipping tokenizer test, tokenizer.json not found: %v", err)
+	}
+	defer tk.Close()
+
+	labels := []string{"trabaja en", "fundó", "adquirió"}
+	promptIDs, rPos := BuildRelationPromptIDs(tk, labels)
+	if len(rPos) != len(labels) {
+		t.Fatalf("Expected %d relation positions, got %d", len(labels), len(rPos))
+	}
+	if promptIDs[len(promptIDs)-1] != tokenSepText {
+		t.Fatalf("Expected trailing SEP_TEXT token %d, got %d", tokenSepText, promptIDs[len(promptIDs)-1])
+	}
+	found := FindRelationRPositions(promptIDs)
+	if len(found) != len(labels) {
+		t.Fatalf("FindRelationRPositions mismatch: got %d want %d", len(found), len(labels))
+	}
+	for i := range rPos {
+		if rPos[i] != found[i] {
+			t.Errorf("Position mismatch at %d: %v vs %v", i, rPos[i], found[i])
+		}
+	}
+
+	words := []string{"Elena", "Rodríguez", ",", "CEOs", "(", "Madrid", ")"}
+	if got := FormatSpanText(words, [2]int{0, 1}); got != "Elena Rodríguez" {
+		t.Errorf("Expected 'Elena Rodríguez', got %q", got)
+	}
+	if got := FormatSpanText(words, [2]int{4, 6}); got != "(Madrid)" {
+		t.Errorf("Expected '(Madrid)', got %q", got)
+	}
+}

@@ -118,8 +118,10 @@ entities, relations, words, spansInfo, err := pipeline.ExtractFromText("Lukas Vi
 
 If you want to export the models yourself (e.g., to use a different GLiNER2 base model), follow these steps:
 
-1. **Install Python dependencies**:
+1. **Set up virtual environment and install dependencies**:
    ```bash
+   python -m venv venv
+   source venv/bin/activate
    pip install torch gliner2 safetensors onnx
    ```
 

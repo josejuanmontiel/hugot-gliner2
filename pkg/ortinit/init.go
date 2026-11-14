@@ -37,7 +37,14 @@ func SetupONNX() error {
 		}
 	}
 
-	// 3. Last resort: Let the OS find it in standard paths
+	// 3. Known local OpenVINO/ONNX Runtime path
+	knownLib := "/home/jose/openvino/openvino/lib/python3.13/site-packages/onnxruntime/capi/libonnxruntime.so.1.25.1"
+	if _, err := os.Stat(knownLib); err == nil {
+		onnxruntime_go.SetSharedLibraryPath(knownLib)
+		return onnxruntime_go.InitializeEnvironment()
+	}
+
+	// 4. Last resort: Let the OS find it in standard paths
 	onnxruntime_go.SetSharedLibraryPath(defaultLib)
 
 	err = onnxruntime_go.InitializeEnvironment()
